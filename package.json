@@ -1,0 +1,37 @@
+{
+  "name": "wopr-plugin-provider-anthropic",
+  "version": "1.0.0",
+  "description": "Anthropic Claude provider plugin for WOPR",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "wopr",
+    "wopr-plugin",
+    "provider",
+    "anthropic",
+    "claude"
+  ],
+  "author": "",
+  "license": "MIT",
+  "peerDependencies": {
+    "wopr": "^0.0.1"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.19"
+  },
+  "devDependencies": {
+    "@types/node": "^18.0.0",
+    "typescript": "^5.0.0"
+  },
+  "wopr": {
+    "plugin": {
+      "name": "provider-anthropic",
+      "category": "provider",
+      "description": "Anthropic Claude API via Agent SDK"
+    }
+  }
+}
