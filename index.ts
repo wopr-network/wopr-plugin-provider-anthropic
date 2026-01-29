@@ -1,21 +1,108 @@
 /**
  * WOPR Plugin: Anthropic Claude Provider
- * 
+ *
  * Provides Anthropic Claude API access via the Agent SDK.
- * Supports vision capabilities for image analysis and session resumption.
- * 
+ * Supports vision capabilities, session resumption, and A2A (Agent-to-Agent) tools.
+ *
  * Feature parity with Kimi provider:
  * - Session resumption via resume option
  * - yoloMode equivalent (permissionMode: bypassPermissions)
  * - Winston logging
  * - Session ID tracking
+ * - A2A tools via MCP server integration
  * Install: wopr plugin install wopr-plugin-provider-anthropic
  */
 
-import { query } from "@anthropic-ai/claude-agent-sdk";
-import type { ModelProvider, ModelClient, ModelQueryOptions } from "wopr/dist/types/provider.js";
-import type { WOPRPlugin, WOPRPluginContext } from "wopr/dist/types.js";
+import { query, createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
+import { z } from "zod";
 import winston from "winston";
+
+// Type definitions (peer dependency from wopr)
+interface A2AToolResult {
+  content: Array<{
+    type: "text" | "image" | "resource";
+    text?: string;
+    data?: string;
+    mimeType?: string;
+  }>;
+  isError?: boolean;
+}
+
+interface A2AToolDefinition {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  handler: (args: Record<string, unknown>) => Promise<A2AToolResult>;
+}
+
+interface A2AServerConfig {
+  name: string;
+  version?: string;
+  tools: A2AToolDefinition[];
+}
+
+interface ModelQueryOptions {
+  prompt: string;
+  systemPrompt?: string;
+  resume?: string;
+  model?: string;
+  temperature?: number;
+  maxTokens?: number;
+  topP?: number;
+  images?: string[];
+  tools?: string[];
+  a2aServers?: Record<string, A2AServerConfig>;
+  allowedTools?: string[];
+  providerOptions?: Record<string, unknown>;
+}
+
+interface ModelClient {
+  query(options: ModelQueryOptions): AsyncGenerator<unknown>;
+  listModels(): Promise<string[]>;
+  healthCheck(): Promise<boolean>;
+}
+
+interface ModelProvider {
+  id: string;
+  name: string;
+  description: string;
+  defaultModel: string;
+  supportedModels: string[];
+  validateCredentials(credentials: string): Promise<boolean>;
+  createClient(credential: string, options?: Record<string, unknown>): Promise<ModelClient>;
+  getCredentialType(): "api-key" | "oauth" | "custom";
+}
+
+interface ConfigField {
+  name: string;
+  type: string;
+  label: string;
+  placeholder?: string;
+  required?: boolean;
+  description?: string;
+  options?: Array<{ value: string; label: string }>;
+  default?: unknown;
+}
+
+interface ConfigSchema {
+  title: string;
+  description: string;
+  fields: ConfigField[];
+}
+
+interface WOPRPluginContext {
+  log: { info: (msg: string) => void };
+  registerProvider: (provider: ModelProvider) => void;
+  registerConfigSchema: (name: string, schema: ConfigSchema) => void;
+}
+
+interface WOPRPlugin {
+  name: string;
+  version: string;
+  description: string;
+  init(ctx: WOPRPluginContext): Promise<void>;
+  shutdown(): Promise<void>;
+}
 
 // Setup winston logger (feature parity with Kimi)
 const logger = winston.createLogger({
@@ -30,6 +117,73 @@ const logger = winston.createLogger({
     new winston.transports.Console({ level: "warn" })
   ],
 });
+
+/**
+ * Convert A2A tool definition to SDK MCP tool format
+ * Transforms our simplified A2AToolDefinition to the SDK's tool() format
+ */
+function convertA2AToolToSdkTool(toolDef: A2AToolDefinition) {
+  // Convert JSON Schema to Zod schema (simplified - handles common cases)
+  // Note: Using basic zod types without .describe() for compatibility
+  const zodSchema: Record<string, z.ZodTypeAny> = {};
+
+  if (toolDef.inputSchema.properties) {
+    const props = toolDef.inputSchema.properties as Record<string, { type?: string; description?: string }>;
+    for (const [key, value] of Object.entries(props)) {
+      switch (value.type) {
+        case "string":
+          zodSchema[key] = z.string();
+          break;
+        case "number":
+          zodSchema[key] = z.number();
+          break;
+        case "boolean":
+          zodSchema[key] = z.boolean();
+          break;
+        case "array":
+          zodSchema[key] = z.array(z.any());
+          break;
+        case "object":
+          zodSchema[key] = z.record(z.string(), z.any());
+          break;
+        default:
+          zodSchema[key] = z.any();
+      }
+    }
+  }
+
+  return tool(
+    toolDef.name,
+    toolDef.description,
+    zodSchema,
+    async (args: Record<string, unknown>) => {
+      const result = await toolDef.handler(args);
+      return result;
+    }
+  );
+}
+
+/**
+ * Create MCP servers from A2A server configurations
+ * Returns a map of server name to MCP server instance
+ */
+function createA2AMcpServers(a2aServers: Record<string, A2AServerConfig>): Record<string, ReturnType<typeof createSdkMcpServer>> {
+  const mcpServers: Record<string, ReturnType<typeof createSdkMcpServer>> = {};
+
+  for (const [serverName, config] of Object.entries(a2aServers)) {
+    const sdkTools = config.tools.map(convertA2AToolToSdkTool);
+
+    mcpServers[serverName] = createSdkMcpServer({
+      name: config.name,
+      version: config.version || "1.0.0",
+      tools: sdkTools,
+    });
+
+    logger.info(`[anthropic] Created A2A MCP server: ${serverName} with ${sdkTools.length} tools`);
+  }
+
+  return mcpServers;
+}
 
 /**
  * Download image from URL and convert to base64
@@ -84,7 +238,6 @@ const anthropicProvider: ModelProvider = {
       const q = query({
         prompt: "ping",
         options: {
-          max_tokens: 10,
           permissionMode: "bypassPermissions",
           allowDangerouslySkipPermissions: true,
         },
@@ -116,13 +269,6 @@ const anthropicProvider: ModelProvider = {
 };
 
 /**
- * Extended query options with resume (feature parity with Kimi)
- */
-interface ExtendedQueryOptions extends ModelQueryOptions {
-  resume?: string;
-}
-
-/**
  * Anthropic client implementation with vision support and session tracking
  */
 class AnthropicClient implements ModelClient {
@@ -134,7 +280,7 @@ class AnthropicClient implements ModelClient {
     process.env.ANTHROPIC_API_KEY = credential;
   }
 
-  async *query(opts: ExtendedQueryOptions): AsyncGenerator<any> {
+  async *query(opts: ModelQueryOptions): AsyncGenerator<unknown> {
     const model = opts.model || anthropicProvider.defaultModel;
 
     const queryOptions: any = {
@@ -161,6 +307,28 @@ class AnthropicClient implements ModelClient {
 
     if (opts.topP !== undefined) {
       queryOptions.topP = opts.topP;
+    }
+
+    // Built-in tools support
+    // e.g., ["Read", "Edit", "Bash", "Glob", "Grep"]
+    if (opts.tools && opts.tools.length > 0) {
+      queryOptions.tools = opts.tools;
+      logger.info(`[anthropic] Built-in tools enabled: ${opts.tools.join(", ")}`);
+    }
+
+    // A2A (Agent-to-Agent) MCP server support
+    // Converts A2AServerConfig to actual MCP server instances
+    if (opts.a2aServers && Object.keys(opts.a2aServers).length > 0) {
+      const mcpServers = createA2AMcpServers(opts.a2aServers);
+      queryOptions.mcpServers = mcpServers;
+      logger.info(`[anthropic] A2A MCP servers enabled: ${Object.keys(mcpServers).join(", ")}`);
+    }
+
+    // Tools that are auto-allowed without permission prompts
+    // Format: "ToolName" for built-in, "mcp__servername__toolname" for a2a
+    if (opts.allowedTools && opts.allowedTools.length > 0) {
+      queryOptions.allowedTools = opts.allowedTools;
+      logger.info(`[anthropic] Allowed tools: ${opts.allowedTools.join(", ")}`);
     }
 
     // Handle images for vision models
@@ -246,7 +414,6 @@ class AnthropicClient implements ModelClient {
       const q = query({
         prompt: "test",
         options: {
-          max_tokens: 10,
           permissionMode: "bypassPermissions",
           allowDangerouslySkipPermissions: true,
         },
@@ -271,13 +438,13 @@ class AnthropicClient implements ModelClient {
  */
 const plugin: WOPRPlugin = {
   name: "provider-anthropic",
-  version: "1.1.0", // Bumped for feature parity
-  description: "Anthropic Claude API provider for WOPR with session resumption, yoloMode, and vision support",
+  version: "1.2.0", // Bumped for A2A support
+  description: "Anthropic Claude API provider for WOPR with session resumption, yoloMode, vision, and A2A tools",
 
   async init(ctx: WOPRPluginContext) {
     ctx.log.info("Registering Anthropic provider...");
     ctx.registerProvider(anthropicProvider);
-    ctx.log.info("Anthropic provider registered (supports session resumption, yoloMode, vision)");
+    ctx.log.info("Anthropic provider registered (supports session resumption, yoloMode, vision, A2A)");
 
     // Register config schema for UI
     ctx.registerConfigSchema("provider-anthropic", {
