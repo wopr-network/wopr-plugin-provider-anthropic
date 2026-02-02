@@ -1,110 +1,19 @@
 /**
  * WOPR Plugin: Anthropic Claude Provider
  *
- * Provides Anthropic Claude API access via the Agent SDK.
- * Supports vision capabilities, session resumption, and A2A (Agent-to-Agent) tools.
- *
- * Feature parity with Kimi provider:
- * - Session resumption via resume option
- * - yoloMode equivalent (permissionMode: bypassPermissions)
- * - Winston logging
- * - Session ID tracking
- * - A2A tools via MCP server integration
- * Install: wopr plugin install wopr-plugin-provider-anthropic
+ * Authentication methods (checked in order):
+ * 1. OAuth - Claude Pro/Max subscription via Claude Code credentials
+ * 2. API Key - Direct API key (sk-ant-...)
  */
 
-import { query, createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
-import { z } from "zod";
+import { query } from "@anthropic-ai/claude-agent-sdk";
+import { existsSync, readFileSync } from "fs";
+import { join } from "path";
+import { homedir } from "os";
+import type { ModelProvider, ModelClient, ModelQueryOptions } from "wopr/dist/types/provider.js";
+import type { WOPRPlugin, WOPRPluginContext } from "wopr/dist/types.js";
 import winston from "winston";
 
-// Type definitions (peer dependency from wopr)
-interface A2AToolResult {
-  content: Array<{
-    type: "text" | "image" | "resource";
-    text?: string;
-    data?: string;
-    mimeType?: string;
-  }>;
-  isError?: boolean;
-}
-
-interface A2AToolDefinition {
-  name: string;
-  description: string;
-  inputSchema: Record<string, unknown>;
-  handler: (args: Record<string, unknown>) => Promise<A2AToolResult>;
-}
-
-interface A2AServerConfig {
-  name: string;
-  version?: string;
-  tools: A2AToolDefinition[];
-}
-
-interface ModelQueryOptions {
-  prompt: string;
-  systemPrompt?: string;
-  resume?: string;
-  model?: string;
-  temperature?: number;
-  maxTokens?: number;
-  topP?: number;
-  images?: string[];
-  tools?: string[];
-  a2aServers?: Record<string, A2AServerConfig>;
-  allowedTools?: string[];
-  providerOptions?: Record<string, unknown>;
-}
-
-interface ModelClient {
-  query(options: ModelQueryOptions): AsyncGenerator<unknown>;
-  listModels(): Promise<string[]>;
-  healthCheck(): Promise<boolean>;
-}
-
-interface ModelProvider {
-  id: string;
-  name: string;
-  description: string;
-  defaultModel: string;
-  supportedModels: string[];
-  validateCredentials(credentials: string): Promise<boolean>;
-  createClient(credential: string, options?: Record<string, unknown>): Promise<ModelClient>;
-  getCredentialType(): "api-key" | "oauth" | "custom";
-}
-
-interface ConfigField {
-  name: string;
-  type: string;
-  label: string;
-  placeholder?: string;
-  required?: boolean;
-  description?: string;
-  options?: Array<{ value: string; label: string }>;
-  default?: unknown;
-}
-
-interface ConfigSchema {
-  title: string;
-  description: string;
-  fields: ConfigField[];
-}
-
-interface WOPRPluginContext {
-  log: { info: (msg: string) => void };
-  registerProvider: (provider: ModelProvider) => void;
-  registerConfigSchema: (name: string, schema: ConfigSchema) => void;
-}
-
-interface WOPRPlugin {
-  name: string;
-  version: string;
-  description: string;
-  init(ctx: WOPRPluginContext): Promise<void>;
-  shutdown(): Promise<void>;
-}
-
-// Setup winston logger (feature parity with Kimi)
 const logger = winston.createLogger({
   level: "info",
   format: winston.format.combine(
@@ -113,141 +22,226 @@ const logger = winston.createLogger({
     winston.format.json()
   ),
   defaultMeta: { service: "wopr-plugin-provider-anthropic" },
-  transports: [
-    new winston.transports.Console({ level: "warn" })
-  ],
+  transports: [new winston.transports.Console({ level: "warn" })],
 });
 
-/**
- * Convert A2A tool definition to SDK MCP tool format
- * Transforms our simplified A2AToolDefinition to the SDK's tool() format
- */
-function convertA2AToolToSdkTool(toolDef: A2AToolDefinition) {
-  // Convert JSON Schema to Zod schema (simplified - handles common cases)
-  // Note: Using basic zod types without .describe() for compatibility
-  const zodSchema: Record<string, z.ZodTypeAny> = {};
+// =============================================================================
+// Auth Detection - exposed for onboarding
+// =============================================================================
 
-  if (toolDef.inputSchema.properties) {
-    const props = toolDef.inputSchema.properties as Record<string, { type?: string; description?: string }>;
-    for (const [key, value] of Object.entries(props)) {
-      switch (value.type) {
-        case "string":
-          zodSchema[key] = z.string();
-          break;
-        case "number":
-          zodSchema[key] = z.number();
-          break;
-        case "boolean":
-          zodSchema[key] = z.boolean();
-          break;
-        case "array":
-          zodSchema[key] = z.array(z.any());
-          break;
-        case "object":
-          zodSchema[key] = z.record(z.string(), z.any());
-          break;
-        default:
-          zodSchema[key] = z.any();
-      }
-    }
-  }
+const CLAUDE_CODE_CREDENTIALS = join(homedir(), ".claude", ".credentials.json");
+const WOPR_AUTH_FILE = join(homedir(), ".wopr", "auth.json");
 
-  return tool(
-    toolDef.name,
-    toolDef.description,
-    zodSchema,
-    async (args: Record<string, unknown>) => {
-      const result = await toolDef.handler(args);
-      return result;
-    }
-  );
+interface AuthState {
+  type: "oauth" | "api_key";
+  accessToken?: string;
+  refreshToken?: string;
+  expiresAt?: number;
+  apiKey?: string;
+  email?: string;
 }
 
-/**
- * Create MCP servers from A2A server configurations
- * Returns a map of server name to MCP server instance
- */
-function createA2AMcpServers(a2aServers: Record<string, A2AServerConfig>): Record<string, ReturnType<typeof createSdkMcpServer>> {
-  const mcpServers: Record<string, ReturnType<typeof createSdkMcpServer>> = {};
-
-  for (const [serverName, config] of Object.entries(a2aServers)) {
-    const sdkTools = config.tools.map(convertA2AToolToSdkTool);
-
-    mcpServers[serverName] = createSdkMcpServer({
-      name: config.name,
-      version: config.version || "1.0.0",
-      tools: sdkTools,
-    });
-
-    logger.info(`[anthropic] Created A2A MCP server: ${serverName} with ${sdkTools.length} tools`);
+function loadClaudeCodeCredentials(): AuthState | null {
+  if (!existsSync(CLAUDE_CODE_CREDENTIALS)) return null;
+  try {
+    const data = JSON.parse(readFileSync(CLAUDE_CODE_CREDENTIALS, "utf-8"));
+    const oauth = data.claudeAiOauth;
+    if (oauth?.accessToken) {
+      return {
+        type: "oauth",
+        accessToken: oauth.accessToken,
+        refreshToken: oauth.refreshToken,
+        expiresAt: oauth.expiresAt,
+        email: oauth.email,
+      };
+    }
+    return null;
+  } catch {
+    return null;
   }
-
-  return mcpServers;
 }
 
-/**
- * Download image from URL and convert to base64
- */
+function loadWoprAuth(): AuthState | null {
+  if (!existsSync(WOPR_AUTH_FILE)) return null;
+  try {
+    return JSON.parse(readFileSync(WOPR_AUTH_FILE, "utf-8"));
+  } catch {
+    return null;
+  }
+}
+
+function getAuth(): AuthState | null {
+  const claudeCodeAuth = loadClaudeCodeCredentials();
+  if (claudeCodeAuth) return claudeCodeAuth;
+  const woprAuth = loadWoprAuth();
+  if (woprAuth) return woprAuth;
+  return null;
+}
+
+// =============================================================================
+// Onboarding Info - exposed via provider
+// =============================================================================
+
+export interface AuthMethodInfo {
+  id: string;
+  name: string;
+  description: string;
+  available: boolean;       // Is this auth method currently usable?
+  requiresInput: boolean;   // Does user need to enter something?
+  inputType?: "password" | "text";
+  inputLabel?: string;
+  inputPlaceholder?: string;
+  setupInstructions?: string[];
+  docsUrl?: string;
+}
+
+function getAuthMethods(): AuthMethodInfo[] {
+  const oauthCreds = loadClaudeCodeCredentials();
+
+  return [
+    {
+      id: "oauth",
+      name: "Claude Pro/Max (OAuth)",
+      description: "Use your Claude subscription - no per-token costs",
+      available: !!oauthCreds,
+      requiresInput: false,
+      setupInstructions: oauthCreds
+        ? [`Logged in as: ${oauthCreds.email || "Claude user"}`]
+        : ["Run: claude login", "Then restart WOPR"],
+      docsUrl: "https://claude.ai/settings",
+    },
+    {
+      id: "api-key",
+      name: "API Key (pay-per-use)",
+      description: "Direct API access - billed per token",
+      available: true,
+      requiresInput: true,
+      inputType: "password",
+      inputLabel: "Anthropic API Key",
+      inputPlaceholder: "sk-ant-...",
+      docsUrl: "https://console.anthropic.com/",
+    },
+    {
+      id: "bedrock",
+      name: "Amazon Bedrock",
+      description: "Claude via AWS",
+      available: !!process.env.AWS_REGION && !!process.env.AWS_ACCESS_KEY_ID,
+      requiresInput: false,
+      setupInstructions: [
+        "Set environment variables:",
+        "  AWS_REGION",
+        "  AWS_ACCESS_KEY_ID",
+        "  AWS_SECRET_ACCESS_KEY",
+      ],
+      docsUrl: "https://docs.aws.amazon.com/bedrock/",
+    },
+    {
+      id: "vertex",
+      name: "Google Vertex AI",
+      description: "Claude via Google Cloud",
+      available: !!process.env.CLOUD_ML_REGION && !!process.env.ANTHROPIC_VERTEX_PROJECT_ID,
+      requiresInput: false,
+      setupInstructions: [
+        "Set environment variables:",
+        "  CLOUD_ML_REGION",
+        "  ANTHROPIC_VERTEX_PROJECT_ID",
+      ],
+      docsUrl: "https://cloud.google.com/vertex-ai/docs",
+    },
+    {
+      id: "foundry",
+      name: "Microsoft Foundry",
+      description: "Claude via Azure",
+      available: !!process.env.ANTHROPIC_FOUNDRY_RESOURCE,
+      requiresInput: false,
+      setupInstructions: [
+        "Set environment variables:",
+        "  ANTHROPIC_FOUNDRY_RESOURCE",
+        "  ANTHROPIC_FOUNDRY_API_KEY (optional)",
+      ],
+      docsUrl: "https://azure.microsoft.com/",
+    },
+  ];
+}
+
+function getActiveAuthMethod(): string {
+  const auth = getAuth();
+  if (auth?.type === "oauth") return "oauth";
+  if (auth?.type === "api_key") return "api-key";
+  if (process.env.CLAUDE_CODE_USE_BEDROCK) return "bedrock";
+  if (process.env.CLAUDE_CODE_USE_VERTEX) return "vertex";
+  if (process.env.CLAUDE_CODE_USE_FOUNDRY) return "foundry";
+  // Check if OAuth is available even if not explicitly set
+  if (loadClaudeCodeCredentials()) return "oauth";
+  return "none";
+}
+
+function hasCredentials(): boolean {
+  return getActiveAuthMethod() !== "none";
+}
+
+// =============================================================================
+// Image handling
+// =============================================================================
+
 async function downloadImageAsBase64(url: string): Promise<{ data: string; mediaType: string } | null> {
   try {
     const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch image: ${response.status}`);
-    }
-    
-    const contentType = response.headers.get('content-type') || 'image/jpeg';
+    if (!response.ok) throw new Error(`Failed to fetch image: ${response.status}`);
+    const contentType = response.headers.get("content-type") || "image/jpeg";
     const buffer = await response.arrayBuffer();
-    const base64 = Buffer.from(buffer).toString('base64');
-    
-    return {
-      data: base64,
-      mediaType: contentType,
-    };
+    const base64 = Buffer.from(buffer).toString("base64");
+    return { data: base64, mediaType: contentType };
   } catch (error) {
     logger.error(`[anthropic] Failed to download image ${url}:`, error);
     return null;
   }
 }
 
-/**
- * Anthropic provider implementation
- */
-const anthropicProvider: ModelProvider = {
+// =============================================================================
+// Provider Implementation
+// =============================================================================
+
+const anthropicProvider: ModelProvider & {
+  getAuthMethods: () => AuthMethodInfo[];
+  getActiveAuthMethod: () => string;
+  hasCredentials: () => boolean;
+} = {
   id: "anthropic",
-  name: "Anthropic",
-  description: "Anthropic Claude API via Agent SDK with session resumption and vision support",
-  defaultModel: "claude-opus-4-5-20251101",
+  name: "Anthropic Claude",
+  description: "Claude via OAuth, API Key, or cloud providers",
+  defaultModel: "claude-sonnet-4-20250514",
   supportedModels: [
-    "claude-opus-4-5-20251101",
     "claude-sonnet-4-20250514",
+    "claude-opus-4-5-20251101",
     "claude-haiku-4-5-20251001",
   ],
 
+  // Onboarding helpers
+  getAuthMethods,
+  getActiveAuthMethod,
+  hasCredentials,
+
   async validateCredentials(credential: string): Promise<boolean> {
-    // API key format: sk-ant-...
+    // Empty credential is valid if we have OAuth or env-based auth
+    if (!credential || credential === "") {
+      return hasCredentials();
+    }
+    // API key format
     if (!credential.startsWith("sk-ant-")) {
       return false;
     }
-
-    // Try a simple health check with the credential
     try {
       const oldKey = process.env.ANTHROPIC_API_KEY;
       process.env.ANTHROPIC_API_KEY = credential;
-
-      // Try a minimal query to validate with yoloMode (bypass permissions)
       const q = query({
         prompt: "ping",
         options: {
           permissionMode: "bypassPermissions",
           allowDangerouslySkipPermissions: true,
-        },
+        } as any,
       });
-
-      // Consume the generator
-      for await (const _ of q) {
-        // Just wait for completion
-      }
-
+      for await (const _ of q) {}
       process.env.ANTHROPIC_API_KEY = oldKey;
       return true;
     } catch (error) {
@@ -256,28 +250,43 @@ const anthropicProvider: ModelProvider = {
     }
   },
 
-  async createClient(
-    credential: string,
-    options?: Record<string, unknown>
-  ): Promise<ModelClient> {
+  async createClient(credential: string, options?: Record<string, unknown>): Promise<ModelClient> {
     return new AnthropicClient(credential, options);
   },
 
   getCredentialType(): "api-key" | "oauth" | "custom" {
-    return "api-key";
+    const active = getActiveAuthMethod();
+    if (active === "oauth") return "oauth";
+    if (active === "api-key") return "api-key";
+    return "oauth"; // Default to OAuth for env-based methods
   },
 };
 
-/**
- * Anthropic client implementation with vision support and session tracking
- */
+// =============================================================================
+// Client Implementation
+// =============================================================================
+
 class AnthropicClient implements ModelClient {
-  constructor(
-    private credential: string,
-    private options?: Record<string, unknown>
-  ) {
-    // Set API key for Claude Agent SDK to use
-    process.env.ANTHROPIC_API_KEY = credential;
+  private authType: string;
+
+  constructor(private credential: string, private options?: Record<string, unknown>) {
+    if (credential && credential.startsWith("sk-ant-")) {
+      this.authType = "api_key";
+      process.env.ANTHROPIC_API_KEY = credential;
+    } else {
+      const auth = getAuth();
+      if (auth?.type === "oauth" && auth.accessToken) {
+        this.authType = "oauth";
+        delete process.env.ANTHROPIC_API_KEY;
+      } else if (auth?.type === "api_key" && auth.apiKey) {
+        this.authType = "api_key";
+        process.env.ANTHROPIC_API_KEY = auth.apiKey;
+      } else {
+        this.authType = "oauth";
+        delete process.env.ANTHROPIC_API_KEY;
+      }
+    }
+    logger.info(`[anthropic] Using auth: ${this.authType}`);
   }
 
   async *query(opts: ModelQueryOptions): AsyncGenerator<unknown> {
@@ -285,119 +294,55 @@ class AnthropicClient implements ModelClient {
 
     const queryOptions: any = {
       max_tokens: opts.maxTokens || 4096,
-      model: model,
-      // yoloMode equivalent - auto-approve all operations
+      model,
       permissionMode: "bypassPermissions",
       allowDangerouslySkipPermissions: true,
     };
 
-    if (opts.systemPrompt) {
-      queryOptions.systemPrompt = opts.systemPrompt;
-    }
-
-    // Session resumption (feature parity with Kimi)
+    if (opts.systemPrompt) queryOptions.systemPrompt = opts.systemPrompt;
     if (opts.resume) {
       queryOptions.resume = opts.resume;
       logger.info(`[anthropic] Resuming session: ${opts.resume}`);
     }
+    if (opts.temperature !== undefined) queryOptions.temperature = opts.temperature;
+    if (opts.topP !== undefined) queryOptions.topP = opts.topP;
+    if (opts.mcpServers) queryOptions.mcpServers = opts.mcpServers;
 
-    if (opts.temperature !== undefined) {
-      queryOptions.temperature = opts.temperature;
-    }
-
-    if (opts.topP !== undefined) {
-      queryOptions.topP = opts.topP;
-    }
-
-    // Built-in tools support
-    // e.g., ["Read", "Edit", "Bash", "Glob", "Grep"]
-    if (opts.tools && opts.tools.length > 0) {
-      queryOptions.tools = opts.tools;
-      logger.info(`[anthropic] Built-in tools enabled: ${opts.tools.join(", ")}`);
-    }
-
-    // A2A (Agent-to-Agent) MCP server support
-    // Converts A2AServerConfig to actual MCP server instances
-    if (opts.a2aServers && Object.keys(opts.a2aServers).length > 0) {
-      const mcpServers = createA2AMcpServers(opts.a2aServers);
-      queryOptions.mcpServers = mcpServers;
-      logger.info(`[anthropic] A2A MCP servers enabled: ${Object.keys(mcpServers).join(", ")}`);
-    }
-
-    // Tools that are auto-allowed without permission prompts
-    // Format: "ToolName" for built-in, "mcp__servername__toolname" for a2a
-    if (opts.allowedTools && opts.allowedTools.length > 0) {
-      queryOptions.allowedTools = opts.allowedTools;
-      logger.info(`[anthropic] Allowed tools: ${opts.allowedTools.join(", ")}`);
-    }
-
-    // Handle images for vision models
     let prompt = opts.prompt;
     if (opts.images && opts.images.length > 0) {
       const imageContents = [];
-      
       for (const imageUrl of opts.images) {
         const imageData = await downloadImageAsBase64(imageUrl);
         if (imageData) {
           imageContents.push({
             type: "image",
-            source: {
-              type: "base64",
-              media_type: imageData.mediaType,
-              data: imageData.data,
-            },
+            source: { type: "base64", media_type: imageData.mediaType, data: imageData.data },
           });
         }
       }
-      
       if (imageContents.length > 0) {
         queryOptions.imageContents = imageContents;
         prompt = `[User has shared ${imageContents.length} image(s)]\n\n${prompt}`;
       }
     }
 
-    // Merge provider-specific options
-    if (opts.providerOptions) {
-      Object.assign(queryOptions, opts.providerOptions);
-    }
-
-    // Merge constructor options
-    if (this.options) {
-      Object.assign(queryOptions, this.options);
-    }
+    if (opts.providerOptions) Object.assign(queryOptions, opts.providerOptions);
+    if (this.options) Object.assign(queryOptions, this.options);
 
     try {
-      // Use Claude Agent SDK query function
-      const q = query({
-        prompt: prompt,
-        options: queryOptions,
-      });
+      const q = query({ prompt, options: queryOptions });
 
-      // Track if we've yielded session_id (feature parity with Kimi)
-      let sessionIdYielded = false;
-
-      // Stream results from agent SDK
       for await (const msg of q) {
-        // Yield session ID from system init message (feature parity with Kimi)
-        if (!sessionIdYielded && msg.type === 'system' && msg.subtype === 'init' && (msg as any).session_id) {
-          const sessionId = (msg as any).session_id;
-          logger.info(`[anthropic] Session initialized: ${sessionId}`);
-          yield { 
-            type: "system", 
-            subtype: "init", 
-            session_id: sessionId 
-          };
-          sessionIdYielded = true;
+        // Log session init for debugging
+        if (msg.type === "system" && msg.subtype === "init" && msg.session_id) {
+          logger.info(`[anthropic] Session initialized: ${msg.session_id}`);
         }
-        
-        // Yield the original message
+        // Pass through all messages unchanged
         yield msg;
       }
     } catch (error) {
       logger.error("[anthropic] Query failed:", error);
-      throw new Error(
-        `Anthropic query failed: ${error instanceof Error ? error.message : String(error)}`
-      );
+      throw new Error(`Anthropic query failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -407,24 +352,11 @@ class AnthropicClient implements ModelClient {
 
   async healthCheck(): Promise<boolean> {
     try {
-      const oldKey = process.env.ANTHROPIC_API_KEY;
-      process.env.ANTHROPIC_API_KEY = this.credential;
-
-      // Try a minimal query with yoloMode
       const q = query({
         prompt: "test",
-        options: {
-          permissionMode: "bypassPermissions",
-          allowDangerouslySkipPermissions: true,
-        },
+        options: { max_tokens: 10, permissionMode: "bypassPermissions", allowDangerouslySkipPermissions: true } as any,
       });
-
-      // Consume the generator
-      for await (const _ of q) {
-        // Just wait for completion
-      }
-
-      process.env.ANTHROPIC_API_KEY = oldKey;
+      for await (const _ of q) {}
       return true;
     } catch (error) {
       logger.error("[anthropic] Health check failed:", error);
@@ -433,55 +365,62 @@ class AnthropicClient implements ModelClient {
   }
 }
 
-/**
- * Plugin export
- */
+// =============================================================================
+// Plugin Export
+// =============================================================================
+
 const plugin: WOPRPlugin = {
   name: "provider-anthropic",
-  version: "1.2.0", // Bumped for A2A support
-  description: "Anthropic Claude API provider for WOPR with session resumption, yoloMode, vision, and A2A tools",
+  version: "2.0.0",
+  description: "Anthropic Claude with OAuth, API Key, Bedrock, Vertex, Foundry support",
 
   async init(ctx: WOPRPluginContext) {
     ctx.log.info("Registering Anthropic provider...");
-    ctx.registerProvider(anthropicProvider);
-    ctx.log.info("Anthropic provider registered (supports session resumption, yoloMode, vision, A2A)");
 
-    // Register config schema for UI
+    const activeAuth = getActiveAuthMethod();
+    const authMethods = getAuthMethods();
+    const activeMethod = authMethods.find(m => m.id === activeAuth);
+
+    if (activeMethod?.available) {
+      ctx.log.info(`  Auth: ${activeMethod.name}`);
+    } else {
+      ctx.log.warn("  Auth: None configured");
+      const available = authMethods.filter(m => m.available);
+      if (available.length > 0) {
+        ctx.log.info(`  Available: ${available.map(m => m.name).join(", ")}`);
+      }
+    }
+
+    ctx.registerProvider(anthropicProvider);
+    ctx.log.info("Anthropic provider registered");
+
+    // Config schema uses data from provider
+    const methods = getAuthMethods();
     ctx.registerConfigSchema("provider-anthropic", {
       title: "Anthropic Claude",
-      description: "Configure Anthropic Claude API credentials and settings",
+      description: "Configure Anthropic Claude authentication",
       fields: [
+        {
+          name: "authMethod",
+          type: "select",
+          label: "Authentication Method",
+          options: methods.map(m => ({
+            value: m.id,
+            label: `${m.name}${m.available ? " ✓" : ""}`,
+          })),
+          default: getActiveAuthMethod(),
+          description: "Choose how to authenticate with Claude",
+        },
         {
           name: "apiKey",
           type: "password",
           label: "API Key",
           placeholder: "sk-ant-...",
-          required: true,
-          description: "Your Anthropic API key (starts with sk-ant-)",
-        },
-        {
-          name: "model",
-          type: "select",
-          label: "Default Model",
-          options: [
-            { value: "claude-opus-4-5-20251101", label: "Claude Opus 4.5" },
-            { value: "claude-sonnet-4-20250514", label: "Claude Sonnet 4" },
-            { value: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5" },
-          ],
-          default: "claude-opus-4-5-20251101",
-          description: "Default model to use for new sessions",
-        },
-        {
-          name: "maxTokens",
-          type: "number",
-          label: "Max Tokens",
-          placeholder: "4096",
-          default: 4096,
-          description: "Maximum tokens per response",
+          required: false,
+          description: "Only needed for API Key auth method",
         },
       ],
     });
-    ctx.log.info("Registered Anthropic config schema");
   },
 
   async shutdown() {
