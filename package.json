@@ -1,6 +1,6 @@
 {
   "name": "wopr-plugin-provider-anthropic",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Anthropic Claude provider plugin for WOPR",
   "main": "index.js",
   "type": "module",

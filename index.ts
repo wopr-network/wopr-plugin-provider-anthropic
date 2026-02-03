@@ -6,11 +6,27 @@
  * 2. API Key - Direct API key (sk-ant-...)
  */
 
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import {
+  query,
+  unstable_v2_createSession,
+  unstable_v2_resumeSession,
+  type SDKSession,
+  type SDKMessage,
+} from "@anthropic-ai/claude-agent-sdk";
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import winston from "winston";
+
+// =============================================================================
+// SDK Type Extensions
+// =============================================================================
+
+// The SDK's SDKMessage type doesn't include session_id, but it's present on
+// every streamed message per the V2 API docs. Extend the type to include it.
+interface SDKMessageWithSessionId extends SDKMessage {
+  session_id?: string;
+}
 
 // =============================================================================
 // Type definitions (inline to avoid wopr dependency for builds)
@@ -33,6 +49,13 @@ interface ModelClient {
   query(options: ModelQueryOptions): AsyncGenerator<unknown>;
   listModels(): Promise<string[]>;
   healthCheck(): Promise<boolean>;
+  // V2 Session API - for injecting messages into active sessions
+  hasActiveSession?(sessionKey: string): boolean;
+  sendToActiveSession?(sessionKey: string, message: string): Promise<void>;
+  getActiveSessionStream?(sessionKey: string): AsyncGenerator<unknown> | null;
+  closeSession?(sessionKey: string): void;
+  // V2 query with session key for active session tracking
+  queryV2?(options: ModelQueryOptions & { sessionKey: string }): AsyncGenerator<unknown>;
 }
 
 interface ModelProvider {
@@ -326,8 +349,100 @@ const anthropicProvider: ModelProvider & {
 };
 
 // =============================================================================
-// Client Implementation
+// Client Implementation with V2 Session Support
 // =============================================================================
+
+interface ActiveSession {
+  session: SDKSession;
+  sessionId: string | null;  // SDK session ID (from Claude)
+  model: string;
+  createdAt: number;
+  lastMessageAt: number;
+  streaming: boolean;
+  streamGenerator: AsyncGenerator<SDKMessage, void> | null;
+}
+
+// Global map of active V2 sessions by sessionKey (WOPR's session identifier)
+const activeSessions = new Map<string, ActiveSession>();
+
+// Lock map to prevent race conditions on concurrent queryV2 calls
+const sessionLocks = new Map<string, Promise<void>>();
+
+// Session timeout: close sessions that haven't been used in 30 minutes
+const SESSION_TIMEOUT_MS = 30 * 60 * 1000;
+
+// Default allowed tools for V2 sessions (can be overridden via providerOptions.allowedTools)
+const DEFAULT_ALLOWED_TOOLS = ["Read", "Write", "Edit", "Glob", "Grep", "Bash", "WebFetch", "WebSearch"];
+
+// Store interval ID for cleanup on shutdown
+let cleanupIntervalId: ReturnType<typeof setInterval> | null = null;
+
+// Start cleanup interval
+function startCleanupInterval() {
+  if (cleanupIntervalId) return; // Already running
+
+  cleanupIntervalId = setInterval(() => {
+    const now = Date.now();
+    for (const [key, session] of activeSessions.entries()) {
+      if (now - session.lastMessageAt > SESSION_TIMEOUT_MS && !session.streaming) {
+        logger.info(`[anthropic] Cleaning up stale V2 session: ${key}`);
+        try {
+          session.session.close();
+        } catch (e) {
+          // Ignore close errors
+        }
+        activeSessions.delete(key);
+      }
+    }
+  }, 5 * 60 * 1000); // Check every 5 minutes
+}
+
+// Stop cleanup interval and close all sessions (for shutdown)
+function stopCleanupAndCloseSessions() {
+  if (cleanupIntervalId) {
+    clearInterval(cleanupIntervalId);
+    cleanupIntervalId = null;
+  }
+
+  // Close all active sessions
+  for (const [key, session] of activeSessions.entries()) {
+    logger.info(`[anthropic] Closing V2 session on shutdown: ${key}`);
+    try {
+      session.session.close();
+    } catch (e) {
+      // Ignore close errors
+    }
+  }
+  activeSessions.clear();
+  sessionLocks.clear();
+}
+
+// Helper to acquire session lock (prevents race conditions)
+async function withSessionLock<T>(sessionKey: string, fn: () => Promise<T>): Promise<T> {
+  // Wait for any existing operation on this session to complete
+  const existingLock = sessionLocks.get(sessionKey);
+  if (existingLock) {
+    await existingLock;
+  }
+
+  // Create a new lock for this operation
+  let resolve: () => void;
+  const lockPromise = new Promise<void>(r => { resolve = r; });
+  sessionLocks.set(sessionKey, lockPromise);
+
+  try {
+    return await fn();
+  } finally {
+    resolve!();
+    // Only delete if this is still our lock
+    if (sessionLocks.get(sessionKey) === lockPromise) {
+      sessionLocks.delete(sessionKey);
+    }
+  }
+}
+
+// Start the cleanup interval
+startCleanupInterval();
 
 class AnthropicClient implements ModelClient {
   private authType: string;
@@ -352,6 +467,160 @@ class AnthropicClient implements ModelClient {
     logger.info(`[anthropic] Using auth: ${this.authType}`);
   }
 
+  // Check if there's an active V2 session for a given sessionKey
+  hasActiveSession(sessionKey: string): boolean {
+    const active = activeSessions.get(sessionKey);
+    return !!active && active.streaming;
+  }
+
+  // Send a message to an active V2 session (inject into running conversation)
+  async sendToActiveSession(sessionKey: string, message: string): Promise<void> {
+    const active = activeSessions.get(sessionKey);
+    if (!active) {
+      throw new Error(`No active session for key: ${sessionKey}`);
+    }
+
+    logger.info(`[anthropic] Injecting message into active session: ${sessionKey}`);
+    active.lastMessageAt = Date.now();
+    await active.session.send(message);
+  }
+
+  // Get the stream generator for an active session (to read new responses)
+  getActiveSessionStream(sessionKey: string): AsyncGenerator<unknown> | null {
+    const active = activeSessions.get(sessionKey);
+    if (!active || !active.streamGenerator) {
+      return null;
+    }
+    return active.streamGenerator as AsyncGenerator<unknown>;
+  }
+
+  // Close an active session
+  closeSession(sessionKey: string): void {
+    const active = activeSessions.get(sessionKey);
+    if (active) {
+      logger.info(`[anthropic] Closing session: ${sessionKey}`);
+      try {
+        active.session.close();
+      } catch (e) {
+        // Ignore close errors
+      }
+      activeSessions.delete(sessionKey);
+    }
+  }
+
+  // V2 Session-based query - keeps session alive for message injection
+  async *queryV2(opts: ModelQueryOptions & { sessionKey: string }): AsyncGenerator<unknown> {
+    const model = opts.model || anthropicProvider.defaultModel;
+    const sessionKey = opts.sessionKey;
+
+    // Check if we have an existing session
+    let active = activeSessions.get(sessionKey);
+
+    // If no session exists, create one with lock to prevent race condition
+    // (two concurrent calls both seeing no session and both creating)
+    if (!active) {
+      active = await withSessionLock(sessionKey, async () => {
+        // Double-check after acquiring lock - another call might have created it
+        const existingSession = activeSessions.get(sessionKey);
+        if (existingSession) {
+          logger.info(`[anthropic] Session already created by concurrent call: ${sessionKey}`);
+          return existingSession;
+        }
+
+        // Create or resume V2 session
+        // allowedTools can be overridden via providerOptions.allowedTools
+        const allowedTools = (opts.providerOptions?.allowedTools as string[]) || DEFAULT_ALLOWED_TOOLS;
+        const sessionOptions: any = {
+          model,
+          allowedTools,
+        };
+
+        // Pass through options from the query
+        if (opts.systemPrompt) sessionOptions.systemPrompt = opts.systemPrompt;
+        if (opts.temperature !== undefined) sessionOptions.temperature = opts.temperature;
+        if (opts.topP !== undefined) sessionOptions.topP = opts.topP;
+        if (opts.maxTokens) sessionOptions.max_tokens = opts.maxTokens;
+        if (opts.mcpServers) sessionOptions.mcpServers = opts.mcpServers;
+        if (opts.providerOptions) {
+          // Copy providerOptions but don't overwrite allowedTools (already handled above)
+          const { allowedTools: _, ...restOptions } = opts.providerOptions;
+          Object.assign(sessionOptions, restOptions);
+        }
+
+        let session: SDKSession;
+
+        if (opts.resume) {
+          logger.info(`[anthropic] Resuming V2 session by ID: ${opts.resume}`);
+          session = unstable_v2_resumeSession(opts.resume, sessionOptions);
+        } else {
+          logger.info(`[anthropic] Creating new V2 session for: ${sessionKey}`);
+          session = unstable_v2_createSession(sessionOptions);
+        }
+
+        // Track this session
+        const newSession: ActiveSession = {
+          session,
+          sessionId: opts.resume || null,
+          model,
+          createdAt: Date.now(),
+          lastMessageAt: Date.now(),
+          streaming: false,  // Will be set true when we start streaming
+          streamGenerator: null,
+        };
+        activeSessions.set(sessionKey, newSession);
+
+        return newSession;
+      });
+    } else {
+      logger.info(`[anthropic] Reusing existing V2 session for: ${sessionKey} (was streaming: ${active.streaming})`);
+    }
+
+    // Now we have a session (either existing or newly created)
+    // The lock is released - streaming happens without holding the lock
+    // This allows sendToActiveSession() to inject messages during streaming
+    active.lastMessageAt = Date.now();
+    active.streaming = true;
+
+    try {
+      // Send the message
+      await active.session.send(opts.prompt);
+
+      // Stream and yield responses
+      const stream = active.session.stream();
+      active.streamGenerator = stream;
+
+      for await (const msg of stream) {
+        // Capture session ID (available on every message per V2 API docs)
+        const msgWithId = msg as SDKMessageWithSessionId;
+        if (msgWithId.session_id && !active.sessionId) {
+          active.sessionId = msgWithId.session_id;
+          logger.info(`[anthropic] V2 Session initialized: ${active.sessionId}`);
+        }
+        yield msg;
+      }
+
+      // Stream completed
+      active.streaming = false;
+      active.streamGenerator = null;
+
+    } catch (error) {
+      active.streaming = false;
+      active.streamGenerator = null;
+
+      // If session is stale/dead, remove it
+      const errorStr = String(error);
+      if (errorStr.includes("session") || errorStr.includes("closed") || errorStr.includes("No conversation")) {
+        logger.warn(`[anthropic] V2 Session stale, removing: ${sessionKey}`);
+        activeSessions.delete(sessionKey);
+      } else {
+        activeSessions.delete(sessionKey);  // Clean up on failure
+        logger.error("[anthropic] V2 Query failed:", error);
+        throw new Error(`Anthropic V2 query failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  }
+
+  // Original V1 query method (backward compatible)
   async *query(opts: ModelQueryOptions): AsyncGenerator<unknown> {
     const model = opts.model || anthropicProvider.defaultModel;
 
@@ -394,11 +663,14 @@ class AnthropicClient implements ModelClient {
 
     try {
       const q = query({ prompt, options: queryOptions });
+      let sessionLogged = false;
 
       for await (const msg of q) {
-        // Log session init for debugging
-        if (msg.type === "system" && msg.subtype === "init" && msg.session_id) {
-          logger.info(`[anthropic] Session initialized: ${msg.session_id}`);
+        // Log session ID once for debugging
+        const msgWithId = msg as SDKMessageWithSessionId;
+        if (msgWithId.session_id && !sessionLogged) {
+          logger.info(`[anthropic] Session initialized: ${msgWithId.session_id}`);
+          sessionLogged = true;
         }
         // Pass through all messages unchanged
         yield msg;
@@ -428,13 +700,16 @@ class AnthropicClient implements ModelClient {
   }
 }
 
+// Export client class for type checking (activeSessions is intentionally NOT exported)
+export { AnthropicClient };
+
 // =============================================================================
 // Plugin Export
 // =============================================================================
 
 const plugin: WOPRPlugin = {
   name: "provider-anthropic",
-  version: "2.0.0",
+  version: "2.1.0",
   description: "Anthropic Claude with OAuth, API Key, Bedrock, Vertex, Foundry support",
 
   async init(ctx: WOPRPluginContext) {
@@ -488,6 +763,7 @@ const plugin: WOPRPlugin = {
 
   async shutdown() {
     logger.info("[provider-anthropic] Shutting down");
+    stopCleanupAndCloseSessions();
   },
 };
 
