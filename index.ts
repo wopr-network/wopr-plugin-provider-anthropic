@@ -267,6 +267,178 @@ function hasCredentials(): boolean {
 }
 
 // =============================================================================
+// Dynamic Model Discovery
+// =============================================================================
+
+const MODELS_PAGE_URL = "https://docs.anthropic.com/en/docs/about-claude/models/overview";
+const MODEL_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
+
+// Hardcoded fallback (used only if fetch + cache both fail)
+const FALLBACK_MODEL_IDS = [
+  "claude-opus-4-6",
+  "claude-sonnet-4-5-20250929",
+  "claude-haiku-4-5-20251001",
+  "claude-sonnet-4-20250514",
+  "claude-opus-4-5-20251101",
+];
+
+interface DiscoveredModel {
+  id: string;
+  name: string;
+  contextWindow: string;
+  maxOutput: string;
+  inputPrice: number;
+  outputPrice: number;
+  legacy: boolean;
+}
+
+interface ModelCacheEntry {
+  models: DiscoveredModel[];
+  fetchedAt: number;
+}
+
+let modelCache: ModelCacheEntry | null = null;
+
+function stripHtml(html: string): string {
+  return html
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Fetch the Anthropic models page and use Haiku to extract structured model data.
+ * Results are cached for 24 hours. Falls back to hardcoded list on failure.
+ */
+async function discoverModels(): Promise<DiscoveredModel[]> {
+  // Return cache if fresh
+  if (modelCache && Date.now() - modelCache.fetchedAt < MODEL_CACHE_TTL) {
+    return modelCache.models;
+  }
+
+  try {
+    // Step 1: Fetch the models overview page
+    logger.info("[anthropic] Fetching models from Anthropic docs...");
+    const response = await fetch(MODELS_PAGE_URL);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const html = await response.text();
+    const text = stripHtml(html).slice(0, 60000); // Keep under token limits
+
+    // Step 2: Ask Haiku to extract model info
+    const extractionPrompt = `Extract ALL Claude model information from this documentation page.
+
+Return ONLY a valid JSON array. Each object must have exactly these fields:
+- "id": string - the Claude API model ID (e.g. "claude-opus-4-6")
+- "name": string - display name (e.g. "Claude Opus 4.6")
+- "contextWindow": string - context window (e.g. "200K / 1M beta")
+- "maxOutput": string - max output tokens (e.g. "128K")
+- "inputPrice": number - USD per million input tokens (e.g. 5)
+- "outputPrice": number - USD per million output tokens (e.g. 25)
+- "legacy": boolean - true if listed as legacy or deprecated
+
+Include ALL models: current AND legacy. Return ONLY the JSON array.
+
+Page content:
+${text}`;
+
+    const q = query({
+      prompt: extractionPrompt,
+      options: {
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 4096,
+        permissionMode: "bypassPermissions",
+        allowDangerouslySkipPermissions: true,
+      } as any,
+    });
+
+    // Collect text from Haiku's response
+    let result = "";
+    for await (const msg of q) {
+      const m = msg as any;
+      if (m.type === "assistant" && m.message?.content) {
+        for (const block of m.message.content) {
+          if (block.type === "text") result += block.text;
+        }
+      }
+    }
+
+    // Parse JSON from response
+    const jsonMatch = result.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) throw new Error("No JSON array in Haiku response");
+
+    const models: DiscoveredModel[] = JSON.parse(jsonMatch[0]);
+    if (!Array.isArray(models) || models.length === 0) {
+      throw new Error("Empty or invalid model array");
+    }
+
+    // Validate each model has required fields
+    for (const model of models) {
+      if (!model.id || typeof model.id !== "string") {
+        throw new Error(`Invalid model entry: missing id`);
+      }
+    }
+
+    // Cache the results
+    modelCache = { models, fetchedAt: Date.now() };
+    logger.info(`[anthropic] Discovered ${models.length} models from Anthropic docs`);
+
+    // Update the provider's supportedModels list
+    anthropicProvider.supportedModels = models.map((m) => m.id);
+
+    // Update defaultModel to latest non-legacy model
+    const currentModels = models.filter((m) => !m.legacy);
+    if (currentModels.length > 0) {
+      anthropicProvider.defaultModel = currentModels[0].id;
+    }
+
+    return models;
+  } catch (error) {
+    logger.warn(`[anthropic] Model discovery failed: ${error instanceof Error ? error.message : String(error)}`);
+
+    // Return stale cache if available
+    if (modelCache) {
+      logger.info("[anthropic] Using stale model cache");
+      return modelCache.models;
+    }
+
+    // Ultimate fallback
+    logger.info("[anthropic] Using hardcoded fallback models");
+    return FALLBACK_MODEL_IDS.map((id) => ({
+      id,
+      name: id,
+      contextWindow: "200K",
+      maxOutput: "64K",
+      inputPrice: 0,
+      outputPrice: 0,
+      legacy: false,
+    }));
+  }
+}
+
+/**
+ * Get discovered models (cached). Non-blocking - returns fallback if not yet fetched.
+ */
+function getDiscoveredModelIds(): string[] {
+  if (modelCache) return modelCache.models.map((m) => m.id);
+  return FALLBACK_MODEL_IDS;
+}
+
+/**
+ * Get full model info for display/selection
+ */
+async function getModelInfo(): Promise<DiscoveredModel[]> {
+  return discoverModels();
+}
+
+// =============================================================================
 // Image handling
 // =============================================================================
 
@@ -292,21 +464,19 @@ const anthropicProvider: ModelProvider & {
   getAuthMethods: () => AuthMethodInfo[];
   getActiveAuthMethod: () => string;
   hasCredentials: () => boolean;
+  getModelInfo: () => Promise<DiscoveredModel[]>;
 } = {
   id: "anthropic",
   name: "Anthropic Claude",
   description: "Claude via OAuth, API Key, or cloud providers",
-  defaultModel: "claude-sonnet-4-20250514",
-  supportedModels: [
-    "claude-sonnet-4-20250514",
-    "claude-opus-4-5-20251101",
-    "claude-haiku-4-5-20251001",
-  ],
+  defaultModel: FALLBACK_MODEL_IDS[0],
+  supportedModels: [...FALLBACK_MODEL_IDS],
 
   // Onboarding helpers
   getAuthMethods,
   getActiveAuthMethod,
   hasCredentials,
+  getModelInfo,
 
   async validateCredentials(credential: string): Promise<boolean> {
     // Empty credential is valid if we have OAuth or env-based auth
@@ -682,7 +852,13 @@ class AnthropicClient implements ModelClient {
   }
 
   async listModels(): Promise<string[]> {
-    return anthropicProvider.supportedModels;
+    // Trigger async discovery (updates supportedModels as side effect)
+    try {
+      const models = await discoverModels();
+      return models.map((m) => m.id);
+    } catch {
+      return anthropicProvider.supportedModels;
+    }
   }
 
   async healthCheck(): Promise<boolean> {
@@ -700,8 +876,9 @@ class AnthropicClient implements ModelClient {
   }
 }
 
-// Export client class for type checking (activeSessions is intentionally NOT exported)
-export { AnthropicClient };
+// Export client class and model discovery for type checking
+export { AnthropicClient, discoverModels, getModelInfo };
+export type { DiscoveredModel };
 
 // =============================================================================
 // Plugin Export
@@ -709,8 +886,8 @@ export { AnthropicClient };
 
 const plugin: WOPRPlugin = {
   name: "provider-anthropic",
-  version: "2.1.0",
-  description: "Anthropic Claude with OAuth, API Key, Bedrock, Vertex, Foundry support",
+  version: "2.2.0",
+  description: "Anthropic Claude with OAuth, API Key, Bedrock, Vertex, Foundry support + dynamic model discovery",
 
   async init(ctx: WOPRPluginContext) {
     ctx.log.info("Registering Anthropic provider...");
@@ -731,6 +908,16 @@ const plugin: WOPRPlugin = {
 
     ctx.registerProvider(anthropicProvider);
     ctx.log.info("Anthropic provider registered");
+
+    // Kick off model discovery in background (non-blocking)
+    if (activeMethod?.available) {
+      discoverModels().then((models) => {
+        const current = models.filter((m) => !m.legacy);
+        ctx.log.info(`  Models: ${current.map((m) => m.name).join(", ")} (${models.length} total)`);
+      }).catch((err) => {
+        ctx.log.warn(`  Model discovery deferred: ${err.message || err}`);
+      });
+    }
 
     // Config schema uses data from provider
     const methods = getAuthMethods();
