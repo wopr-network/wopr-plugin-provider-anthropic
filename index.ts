@@ -23,10 +23,8 @@ import winston from "winston";
 // =============================================================================
 
 // The SDK's SDKMessage type doesn't include session_id, but it's present on
-// every streamed message per the V2 API docs. Extend the type to include it.
-interface SDKMessageWithSessionId extends SDKMessage {
-  session_id?: string;
-}
+// every streamed message per the V2 API docs. Intersect the type to include it.
+type SDKMessageWithSessionId = SDKMessage & { session_id?: string };
 
 // =============================================================================
 // Type definitions (inline to avoid wopr dependency for builds)
