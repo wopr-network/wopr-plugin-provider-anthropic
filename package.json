@@ -1,12 +1,15 @@
 {
-  "name": "wopr-plugin-provider-anthropic",
-  "version": "2.2.0",
+  "author": "",
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.29",
+    "@anthropic-ai/claude-code": "^2.1.29",
+    "winston": "^3.11.0"
+  },
   "description": "Anthropic Claude provider plugin for WOPR",
-  "main": "index.js",
-  "type": "module",
-  "scripts": {
-    "build": "tsc",
-    "prepublishOnly": "npm run build"
+  "devDependencies": {
+    "@biomejs/biome": "^2.3.14",
+    "@types/node": "^18.0.0",
+    "typescript": "^5.0.0"
   },
   "keywords": [
     "wopr",
@@ -15,25 +18,27 @@
     "anthropic",
     "claude"
   ],
-  "author": "",
   "license": "MIT",
+  "main": "index.js",
+  "name": "wopr-plugin-provider-anthropic",
   "peerDependencies": {
     "wopr": "^0.0.1"
   },
-  "dependencies": {
-    "@anthropic-ai/claude-code": "^2.1.29",
-    "@anthropic-ai/claude-agent-sdk": "^0.2.29",
-    "winston": "^3.11.0"
+  "scripts": {
+    "build": "tsc",
+    "check": "biome check src/ && tsc --noEmit",
+    "format": "biome format --write src/",
+    "lint": "biome check src/",
+    "lint:fix": "biome check --fix src/",
+    "prepublishOnly": "npm run build"
   },
-  "devDependencies": {
-    "@types/node": "^18.0.0",
-    "typescript": "^5.0.0"
-  },
+  "type": "module",
+  "version": "2.2.0",
   "wopr": {
     "plugin": {
-      "name": "provider-anthropic",
       "category": "provider",
-      "description": "Anthropic Claude API via Agent SDK"
+      "description": "Anthropic Claude API via Agent SDK",
+      "name": "provider-anthropic"
     }
   }
 }
