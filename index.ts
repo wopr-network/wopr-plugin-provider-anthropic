@@ -30,6 +30,15 @@ type SDKMessageWithSessionId = SDKMessage & { session_id?: string };
 // Type definitions (inline to avoid wopr dependency for builds)
 // =============================================================================
 
+type ThinkingConfig =
+  | { type: 'adaptive' }
+  | {
+      type: 'enabled';
+      /** Must be within Anthropic's supported min/max range for the chosen model. */
+      budgetTokens: number;
+    }
+  | { type: 'disabled' };
+
 interface ModelQueryOptions {
   prompt: string;
   systemPrompt?: string;
@@ -41,6 +50,12 @@ interface ModelQueryOptions {
   images?: string[];
   mcpServers?: Record<string, unknown>;
   providerOptions?: Record<string, unknown>;
+  /** Controls extended thinking / chain-of-thought reasoning. */
+  thinking?: ThinkingConfig;
+  /** Controls effort level — works with adaptive thinking to guide depth. */
+  effort?: 'low' | 'medium' | 'high' | 'max';
+  /** Enable beta features, e.g. 'context-1m-2025-08-07' for 1M context. */
+  betas?: string[];
 }
 
 interface ModelClient {
@@ -407,13 +422,13 @@ ${text}`;
       return modelCache.models;
     }
 
-    // Ultimate fallback
+    // Ultimate fallback — context windows reflect 1M beta availability
     logger.info("[anthropic] Using hardcoded fallback models");
     return FALLBACK_MODEL_IDS.map((id) => ({
       id,
       name: id,
-      contextWindow: "200K",
-      maxOutput: "64K",
+      contextWindow: (id.includes("sonnet") || id.includes("opus")) ? "200K (1M with beta)" : "200K",
+      maxOutput: id.includes("haiku") ? "8K" : "128K",
       inputPrice: 0,
       outputPrice: 0,
       legacy: false,
@@ -709,6 +724,9 @@ class AnthropicClient implements ModelClient {
         if (opts.topP !== undefined) sessionOptions.topP = opts.topP;
         if (opts.maxTokens) sessionOptions.max_tokens = opts.maxTokens;
         if (opts.mcpServers) sessionOptions.mcpServers = opts.mcpServers;
+        if (opts.thinking) sessionOptions.thinking = opts.thinking;
+        if (opts.effort) sessionOptions.effort = opts.effort;
+        if (opts.betas) sessionOptions.betas = opts.betas;
         if (opts.providerOptions) {
           // Copy providerOptions but don't overwrite allowedTools (already handled above)
           const { allowedTools: _, ...restOptions } = opts.providerOptions;
@@ -807,6 +825,9 @@ class AnthropicClient implements ModelClient {
     if (opts.temperature !== undefined) queryOptions.temperature = opts.temperature;
     if (opts.topP !== undefined) queryOptions.topP = opts.topP;
     if (opts.mcpServers) queryOptions.mcpServers = opts.mcpServers;
+    if (opts.thinking) queryOptions.thinking = opts.thinking;
+    if (opts.effort) queryOptions.effort = opts.effort;
+    if (opts.betas) queryOptions.betas = opts.betas;
 
     let prompt = opts.prompt;
     if (opts.images && opts.images.length > 0) {
