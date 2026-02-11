@@ -32,7 +32,11 @@ type SDKMessageWithSessionId = SDKMessage & { session_id?: string };
 
 type ThinkingConfig =
   | { type: 'adaptive' }
-  | { type: 'enabled'; budgetTokens: number }
+  | {
+      type: 'enabled';
+      /** Must be within Anthropic's supported min/max range for the chosen model. */
+      budgetTokens: number;
+    }
   | { type: 'disabled' };
 
 interface ModelQueryOptions {
@@ -423,7 +427,7 @@ ${text}`;
     return FALLBACK_MODEL_IDS.map((id) => ({
       id,
       name: id,
-      contextWindow: id.includes("sonnet") ? "200K (1M with beta)" : "200K",
+      contextWindow: (id.includes("sonnet") || id.includes("opus")) ? "200K (1M with beta)" : "200K",
       maxOutput: id.includes("haiku") ? "8K" : "128K",
       inputPrice: 0,
       outputPrice: 0,
