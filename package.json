@@ -20,7 +20,7 @@
   ],
   "license": "MIT",
   "main": "index.js",
-  "name": "wopr-plugin-provider-anthropic",
+  "name": "@wopr-network/wopr-plugin-provider-anthropic",
   "peerDependencies": {
     "wopr": "^0.0.1"
   },
@@ -40,5 +40,11 @@
       "description": "Anthropic Claude API via Agent SDK",
       "name": "provider-anthropic"
     }
-  }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist"
+  ]
 }
