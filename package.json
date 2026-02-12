@@ -33,7 +33,7 @@
     "prepublishOnly": "npm run build"
   },
   "type": "module",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "wopr": {
     "plugin": {
       "category": "provider",

@@ -39,6 +39,18 @@ type ThinkingConfig =
     }
   | { type: 'disabled' };
 
+/**
+ * Structured output format using JSON Schema constrained decoding.
+ * GA on Claude Opus 4.6, Sonnet 4.5, Opus 4.5, Haiku 4.5.
+ */
+type ResponseFormat =
+  | {
+      type: 'json_schema';
+      /** A JSON Schema object describing the expected response structure. */
+      schema: Record<string, unknown>;
+    }
+  | { type: 'text' };
+
 interface ModelQueryOptions {
   prompt: string;
   systemPrompt?: string;
@@ -56,6 +68,12 @@ interface ModelQueryOptions {
   effort?: 'low' | 'medium' | 'high' | 'max';
   /** Enable beta features, e.g. 'context-1m-2025-08-07' for 1M context. */
   betas?: string[];
+  /**
+   * Request structured JSON output conforming to a schema.
+   * Uses Anthropic's constrained decoding — the model cannot produce tokens
+   * that violate the schema. Supported on Opus 4.6, Sonnet 4.5, Opus 4.5, Haiku 4.5.
+   */
+  responseFormat?: ResponseFormat;
 }
 
 interface ModelClient {
@@ -727,6 +745,9 @@ class AnthropicClient implements ModelClient {
         if (opts.thinking) sessionOptions.thinking = opts.thinking;
         if (opts.effort) sessionOptions.effort = opts.effort;
         if (opts.betas) sessionOptions.betas = opts.betas;
+        if (opts.responseFormat) {
+          sessionOptions.outputFormat = opts.responseFormat;
+        }
         if (opts.providerOptions) {
           // Copy providerOptions but don't overwrite allowedTools (already handled above)
           const { allowedTools: _, ...restOptions } = opts.providerOptions;
@@ -828,6 +849,9 @@ class AnthropicClient implements ModelClient {
     if (opts.thinking) queryOptions.thinking = opts.thinking;
     if (opts.effort) queryOptions.effort = opts.effort;
     if (opts.betas) queryOptions.betas = opts.betas;
+    if (opts.responseFormat) {
+      queryOptions.outputFormat = opts.responseFormat;
+    }
 
     let prompt = opts.prompt;
     if (opts.images && opts.images.length > 0) {
@@ -897,7 +921,7 @@ class AnthropicClient implements ModelClient {
 
 // Export client class and model discovery for type checking
 export { AnthropicClient, discoverModels, getModelInfo };
-export type { DiscoveredModel };
+export type { DiscoveredModel, ResponseFormat };
 
 // =============================================================================
 // Plugin Export
@@ -905,8 +929,8 @@ export type { DiscoveredModel };
 
 const plugin: WOPRPlugin = {
   name: "provider-anthropic",
-  version: "2.2.0",
-  description: "Anthropic Claude with OAuth, API Key, Bedrock, Vertex, Foundry support + dynamic model discovery",
+  version: "2.3.0",
+  description: "Anthropic Claude with OAuth, API Key, Bedrock, Vertex, Foundry support + dynamic model discovery + structured outputs",
 
   async init(ctx: WOPRPluginContext) {
     ctx.log.info("Registering Anthropic provider...");
