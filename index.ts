@@ -745,7 +745,7 @@ class AnthropicClient implements ModelClient {
         if (opts.thinking) sessionOptions.thinking = opts.thinking;
         if (opts.effort) sessionOptions.effort = opts.effort;
         if (opts.betas) sessionOptions.betas = opts.betas;
-        if (opts.responseFormat && opts.responseFormat.type === 'json_schema') {
+        if (opts.responseFormat) {
           sessionOptions.outputFormat = opts.responseFormat;
         }
         if (opts.providerOptions) {
@@ -849,7 +849,7 @@ class AnthropicClient implements ModelClient {
     if (opts.thinking) queryOptions.thinking = opts.thinking;
     if (opts.effort) queryOptions.effort = opts.effort;
     if (opts.betas) queryOptions.betas = opts.betas;
-    if (opts.responseFormat && opts.responseFormat.type === 'json_schema') {
+    if (opts.responseFormat) {
       queryOptions.outputFormat = opts.responseFormat;
     }
 
