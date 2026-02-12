@@ -1,7 +1,7 @@
 {
   "author": "",
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.29",
+    "@anthropic-ai/claude-agent-sdk": "^0.2.39",
     "@anthropic-ai/claude-code": "^2.1.29",
     "winston": "^3.11.0"
   },
