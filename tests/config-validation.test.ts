@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Mock the SDK
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
@@ -18,8 +18,12 @@ vi.mock("fs", async (importOriginal) => {
 });
 
 describe("config validation", () => {
+  const originalFetch = globalThis.fetch;
+
   beforeEach(() => {
     vi.clearAllMocks();
+    // Stub fetch to prevent real network calls from discoverModels()
+    globalThis.fetch = vi.fn().mockRejectedValue(new Error("network disabled in tests"));
     // Clear env vars that could affect auth detection
     delete process.env.CLAUDE_CODE_USE_BEDROCK;
     delete process.env.CLAUDE_CODE_USE_VERTEX;
@@ -29,6 +33,10 @@ describe("config validation", () => {
     delete process.env.CLOUD_ML_REGION;
     delete process.env.ANTHROPIC_VERTEX_PROJECT_ID;
     delete process.env.ANTHROPIC_FOUNDRY_RESOURCE;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
   });
 
   describe("API key format validation", () => {

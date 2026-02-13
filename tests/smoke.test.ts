@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Mock the SDK before importing the plugin
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
@@ -18,8 +18,25 @@ vi.mock("fs", async (importOriginal) => {
 });
 
 describe("plugin registration smoke test", () => {
+  const originalFetch = globalThis.fetch;
+
   beforeEach(() => {
     vi.clearAllMocks();
+    // Stub fetch to prevent real network calls from discoverModels()
+    globalThis.fetch = vi.fn().mockRejectedValue(new Error("network disabled in tests"));
+    // Clear env vars that could trigger cloud auth detection
+    delete process.env.CLAUDE_CODE_USE_BEDROCK;
+    delete process.env.CLAUDE_CODE_USE_VERTEX;
+    delete process.env.CLAUDE_CODE_USE_FOUNDRY;
+    delete process.env.AWS_REGION;
+    delete process.env.AWS_ACCESS_KEY_ID;
+    delete process.env.CLOUD_ML_REGION;
+    delete process.env.ANTHROPIC_VERTEX_PROJECT_ID;
+    delete process.env.ANTHROPIC_FOUNDRY_RESOURCE;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
   });
 
   it("exports a valid WOPR plugin object", async () => {
@@ -27,7 +44,8 @@ describe("plugin registration smoke test", () => {
 
     expect(plugin).toBeDefined();
     expect(plugin.name).toBe("provider-anthropic");
-    expect(plugin.version).toBe("2.3.0");
+    // Assert semver format rather than hardcoding a version
+    expect(plugin.version).toMatch(/^\d+\.\d+\.\d+/);
     expect(plugin.description).toBeTypeOf("string");
     expect(plugin.description.length).toBeGreaterThan(0);
     expect(plugin.init).toBeTypeOf("function");
