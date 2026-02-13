@@ -1,0 +1,81 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+// Mock the SDK before importing the plugin
+vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
+  query: vi.fn(),
+  unstable_v2_createSession: vi.fn(),
+  unstable_v2_resumeSession: vi.fn(),
+}));
+
+// Mock fs to avoid reading real credential files
+vi.mock("fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("fs")>();
+  return {
+    ...actual,
+    existsSync: vi.fn(() => false),
+    readFileSync: vi.fn(() => "{}"),
+  };
+});
+
+describe("plugin registration smoke test", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("exports a valid WOPR plugin object", async () => {
+    const { default: plugin } = await import("../index.js");
+
+    expect(plugin).toBeDefined();
+    expect(plugin.name).toBe("provider-anthropic");
+    expect(plugin.version).toBe("2.3.0");
+    expect(plugin.description).toBeTypeOf("string");
+    expect(plugin.description.length).toBeGreaterThan(0);
+    expect(plugin.init).toBeTypeOf("function");
+    expect(plugin.shutdown).toBeTypeOf("function");
+  });
+
+  it("init registers a provider and config schema", async () => {
+    const { default: plugin } = await import("../index.js");
+
+    const registeredProviders: unknown[] = [];
+    const registeredSchemas: Array<{ name: string; schema: unknown }> = [];
+
+    const ctx = {
+      log: { info: vi.fn(), warn: vi.fn() },
+      registerProvider: vi.fn((p: unknown) => registeredProviders.push(p)),
+      registerConfigSchema: vi.fn((name: string, schema: unknown) =>
+        registeredSchemas.push({ name, schema })
+      ),
+    };
+
+    await plugin.init(ctx);
+
+    // Provider was registered
+    expect(ctx.registerProvider).toHaveBeenCalledOnce();
+    expect(registeredProviders).toHaveLength(1);
+
+    const provider = registeredProviders[0] as Record<string, unknown>;
+    expect(provider.id).toBe("anthropic");
+    expect(provider.name).toBe("Anthropic Claude");
+    expect(provider.defaultModel).toBeTypeOf("string");
+    expect(Array.isArray(provider.supportedModels)).toBe(true);
+
+    // Config schema was registered
+    expect(ctx.registerConfigSchema).toHaveBeenCalledOnce();
+    expect(registeredSchemas[0].name).toBe("provider-anthropic");
+  });
+
+  it("shutdown completes without errors", async () => {
+    const { default: plugin } = await import("../index.js");
+
+    await expect(plugin.shutdown()).resolves.toBeUndefined();
+  });
+
+  it("exports AnthropicClient and model discovery utilities", async () => {
+    const mod = await import("../index.js");
+
+    expect(mod.AnthropicClient).toBeTypeOf("function");
+    expect(mod.discoverModels).toBeTypeOf("function");
+    expect(mod.getModelInfo).toBeTypeOf("function");
+  });
+});
