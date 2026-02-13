@@ -52,6 +52,22 @@ describe("plugin registration smoke test", () => {
     expect(plugin.shutdown).toBeTypeOf("function");
   });
 
+  it("includes a valid PluginManifest", async () => {
+    const { default: plugin } = await import("../index.js");
+
+    expect(plugin.manifest).toBeDefined();
+    const m = plugin.manifest!;
+    expect(m.name).toBe("@wopr-network/wopr-plugin-provider-anthropic");
+    expect(m.version).toMatch(/^\d+\.\d+\.\d+/);
+    expect(m.description).toBeTypeOf("string");
+    expect(m.capabilities).toContain("provider");
+    expect(m.category).toBe("ai-provider");
+    expect(m.requires?.network?.outbound).toBe(true);
+    expect(m.configSchema).toBeDefined();
+    expect(m.configSchema!.fields.length).toBeGreaterThan(0);
+    expect(m.lifecycle?.shutdownBehavior).toBe("graceful");
+  });
+
   it("init registers a provider and config schema", async () => {
     const { default: plugin } = await import("../index.js");
 

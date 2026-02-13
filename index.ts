@@ -17,6 +17,12 @@ import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import winston from "winston";
+import type {
+  ConfigSchema,
+  PluginManifest,
+  WOPRPlugin,
+  WOPRPluginContext,
+} from "@wopr-network/plugin-types";
 
 // =============================================================================
 // SDK Type Extensions
@@ -27,7 +33,7 @@ import winston from "winston";
 type SDKMessageWithSessionId = SDKMessage & { session_id?: string };
 
 // =============================================================================
-// Type definitions (inline to avoid wopr dependency for builds)
+// Provider-specific types (not part of plugin-types)
 // =============================================================================
 
 type ThinkingConfig =
@@ -98,37 +104,6 @@ interface ModelProvider {
   validateCredentials(credentials: string): Promise<boolean>;
   createClient(credential: string, options?: Record<string, unknown>): Promise<ModelClient>;
   getCredentialType(): "api-key" | "oauth" | "custom";
-}
-
-interface ConfigField {
-  name: string;
-  type: string;
-  label: string;
-  placeholder?: string;
-  required?: boolean;
-  description?: string;
-  options?: Array<{ value: string; label: string }>;
-  default?: unknown;
-}
-
-interface ConfigSchema {
-  title: string;
-  description: string;
-  fields: ConfigField[];
-}
-
-interface WOPRPluginContext {
-  log: { info: (msg: string) => void; warn: (msg: string) => void };
-  registerProvider: (provider: ModelProvider) => void;
-  registerConfigSchema: (name: string, schema: ConfigSchema) => void;
-}
-
-interface WOPRPlugin {
-  name: string;
-  version: string;
-  description: string;
-  init(ctx: WOPRPluginContext): Promise<void>;
-  shutdown(): Promise<void>;
 }
 
 const logger = winston.createLogger({
@@ -924,6 +899,53 @@ export { AnthropicClient, discoverModels, getModelInfo };
 export type { DiscoveredModel, ResponseFormat };
 
 // =============================================================================
+// Plugin Manifest
+// =============================================================================
+
+const manifest: PluginManifest = {
+  name: "@wopr-network/wopr-plugin-provider-anthropic",
+  version: "2.3.0",
+  description: "Anthropic Claude with OAuth, API Key, Bedrock, Vertex, Foundry support + dynamic model discovery + structured outputs",
+  author: "WOPR Network",
+  license: "MIT",
+  repository: "https://github.com/wopr-network/wopr-plugin-provider-anthropic",
+  capabilities: ["provider"],
+  category: "ai-provider",
+  icon: "🤖",
+  tags: ["anthropic", "claude", "ai", "provider", "oauth", "bedrock", "vertex"],
+  requires: {
+    network: { outbound: true, hosts: ["api.anthropic.com", "docs.anthropic.com"] },
+  },
+  configSchema: {
+    title: "Anthropic Claude",
+    description: "Configure Anthropic Claude authentication",
+    fields: [
+      {
+        name: "authMethod",
+        type: "select",
+        label: "Authentication Method",
+        description: "Choose how to authenticate with Claude",
+        setupFlow: "paste",
+      },
+      {
+        name: "apiKey",
+        type: "password",
+        label: "API Key",
+        placeholder: "sk-ant-...",
+        required: false,
+        description: "Only needed for API Key auth method",
+        secret: true,
+        setupFlow: "paste",
+      },
+    ],
+  },
+  lifecycle: {
+    shutdownBehavior: "graceful",
+    shutdownTimeoutMs: 10000,
+  },
+};
+
+// =============================================================================
 // Plugin Export
 // =============================================================================
 
@@ -931,6 +953,7 @@ const plugin: WOPRPlugin = {
   name: "provider-anthropic",
   version: "2.3.0",
   description: "Anthropic Claude with OAuth, API Key, Bedrock, Vertex, Foundry support + dynamic model discovery + structured outputs",
+  manifest,
 
   async init(ctx: WOPRPluginContext) {
     ctx.log.info("Registering Anthropic provider...");
