@@ -56,13 +56,19 @@ describe("message translation (WOPR -> Anthropic SDK)", () => {
       allowDangerouslySkipPermissions: true,
     });
 
-    // Verify response was yielded through
-    expect(chunks).toHaveLength(1);
+    // Verify response was yielded through (assistant message + cost_metadata)
+    expect(chunks).toHaveLength(2);
     expect(chunks[0]).toMatchObject({
       type: "assistant",
       message: {
         content: [{ type: "text", text: "Hello from Claude" }],
       },
+    });
+    expect(chunks[1]).toMatchObject({
+      type: "cost_metadata",
+      input_tokens: 0,
+      output_tokens: 0,
+      total_cost_usd: 0,
     });
   });
 

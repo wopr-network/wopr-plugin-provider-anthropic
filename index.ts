@@ -444,6 +444,39 @@ async function getModelInfo(): Promise<DiscoveredModel[]> {
   return discoverModels();
 }
 
+/**
+ * Look up a discovered model by ID. Returns null if not cached.
+ */
+function getDiscoveredModel(modelId: string): DiscoveredModel | null {
+  if (!modelCache) return null;
+  return modelCache.models.find((m) => m.id === modelId) ?? null;
+}
+
+/**
+ * Compute the wholesale cost of a single API call using per-model pricing.
+ *
+ * DiscoveredModel.inputPrice / outputPrice are USD per million tokens.
+ * Returns 0 if the model is not found in the cache or prices are 0
+ * (e.g. fallback models with unknown pricing).
+ */
+function computeCost(
+  modelId: string,
+  inputTokens: number,
+  outputTokens: number,
+): { total_cost_usd: number; input_cost_usd: number; output_cost_usd: number } {
+  const model = getDiscoveredModel(modelId);
+  if (!model || (model.inputPrice === 0 && model.outputPrice === 0)) {
+    return { total_cost_usd: 0, input_cost_usd: 0, output_cost_usd: 0 };
+  }
+  const inputCost = (inputTokens / 1_000_000) * model.inputPrice;
+  const outputCost = (outputTokens / 1_000_000) * model.outputPrice;
+  return {
+    total_cost_usd: inputCost + outputCost,
+    input_cost_usd: inputCost,
+    output_cost_usd: outputCost,
+  };
+}
+
 // =============================================================================
 // Image handling
 // =============================================================================
@@ -763,6 +796,10 @@ class AnthropicClient implements ModelClient {
     active.lastMessageAt = Date.now();
     active.streaming = true;
 
+    // Accumulate token usage across all assistant messages in this turn
+    let totalInputTokens = 0;
+    let totalOutputTokens = 0;
+
     try {
       // Send the message
       await active.session.send(opts.prompt);
@@ -778,12 +815,32 @@ class AnthropicClient implements ModelClient {
           active.sessionId = msgWithId.session_id;
           logger.info(`[anthropic] V2 Session initialized: ${active.sessionId}`);
         }
+
+        // Extract token usage from assistant messages
+        const m = msg as any;
+        if (m.type === "assistant" && m.message?.usage) {
+          totalInputTokens += m.message.usage.input_tokens ?? 0;
+          totalOutputTokens += m.message.usage.output_tokens ?? 0;
+        }
+
         yield msg;
       }
 
       // Stream completed
       active.streaming = false;
       active.streamGenerator = null;
+
+      // Yield cost metadata after streaming completes
+      const cost = computeCost(model, totalInputTokens, totalOutputTokens);
+      yield {
+        type: "cost_metadata",
+        model,
+        input_tokens: totalInputTokens,
+        output_tokens: totalOutputTokens,
+        total_cost_usd: cost.total_cost_usd,
+        input_cost_usd: cost.input_cost_usd,
+        output_cost_usd: cost.output_cost_usd,
+      };
 
     } catch (error) {
       active.streaming = false;
@@ -849,6 +906,10 @@ class AnthropicClient implements ModelClient {
     if (opts.providerOptions) Object.assign(queryOptions, opts.providerOptions);
     if (this.options) Object.assign(queryOptions, this.options);
 
+    // Accumulate token usage across all assistant messages
+    let totalInputTokens = 0;
+    let totalOutputTokens = 0;
+
     try {
       const q = query({ prompt, options: queryOptions });
       let sessionLogged = false;
@@ -860,9 +921,35 @@ class AnthropicClient implements ModelClient {
           logger.info(`[anthropic] Session initialized: ${msgWithId.session_id}`);
           sessionLogged = true;
         }
+
+        // Extract token usage from assistant messages
+        const m = msg as any;
+        if (m.type === "assistant" && m.message?.usage) {
+          totalInputTokens += m.message.usage.input_tokens ?? 0;
+          totalOutputTokens += m.message.usage.output_tokens ?? 0;
+        }
+
+        // If this is the SDK result message, enrich it with cost data
+        if (m.type === "result") {
+          // The SDK result already has usage/total_cost_usd from the Claude CLI.
+          // We also yield our own cost metadata below, so pass through as-is.
+        }
+
         // Pass through all messages unchanged
         yield msg;
       }
+
+      // Yield a cost metadata message after streaming completes
+      const cost = computeCost(model, totalInputTokens, totalOutputTokens);
+      yield {
+        type: "cost_metadata",
+        model,
+        input_tokens: totalInputTokens,
+        output_tokens: totalOutputTokens,
+        total_cost_usd: cost.total_cost_usd,
+        input_cost_usd: cost.input_cost_usd,
+        output_cost_usd: cost.output_cost_usd,
+      };
     } catch (error) {
       logger.error("[anthropic] Query failed:", error);
       throw new Error(`Anthropic query failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -895,7 +982,7 @@ class AnthropicClient implements ModelClient {
 }
 
 // Export client class and model discovery for type checking
-export { AnthropicClient, discoverModels, getModelInfo };
+export { AnthropicClient, discoverModels, getModelInfo, computeCost, getDiscoveredModel };
 export type { DiscoveredModel, ResponseFormat };
 
 // =============================================================================
