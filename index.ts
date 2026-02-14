@@ -622,25 +622,53 @@ startCleanupInterval();
 
 class AnthropicClient implements ModelClient {
   private authType: string;
+  private envOverrides: Record<string, string | undefined> = {};
 
   constructor(private credential: string, private options?: Record<string, unknown>) {
-    if (credential && credential.startsWith("sk-ant-")) {
+    // Hosted mode: platform injects baseUrl + tenantToken to route through gateway
+    const baseUrl = options?.baseUrl as string | undefined;
+    const tenantToken = options?.tenantToken as string | undefined;
+
+    if (baseUrl && tenantToken) {
+      // Validate baseUrl is a proper HTTPS URL before trusting it
+      let parsed: URL;
+      try {
+        parsed = new URL(baseUrl);
+      } catch {
+        throw new Error(`[anthropic] Invalid hosted mode baseUrl: ${baseUrl}`);
+      }
+      if (parsed.protocol !== "https:") {
+        throw new Error(`[anthropic] Hosted mode baseUrl must use HTTPS, got: ${parsed.protocol}`);
+      }
+
+      this.authType = "hosted";
+      this.envOverrides.ANTHROPIC_BASE_URL = baseUrl;
+      this.envOverrides.ANTHROPIC_API_KEY = tenantToken;
+      logger.info(`[anthropic] Using hosted mode: gateway at ${baseUrl}`);
+    } else if (credential && credential.startsWith("sk-ant-")) {
       this.authType = "api_key";
-      process.env.ANTHROPIC_API_KEY = credential;
+      this.envOverrides.ANTHROPIC_BASE_URL = undefined;
+      this.envOverrides.ANTHROPIC_API_KEY = credential;
     } else {
+      this.envOverrides.ANTHROPIC_BASE_URL = undefined;
       const auth = getAuth();
       if (auth?.type === "oauth" && auth.accessToken) {
         this.authType = "oauth";
-        delete process.env.ANTHROPIC_API_KEY;
+        this.envOverrides.ANTHROPIC_API_KEY = undefined;
       } else if (auth?.type === "api_key" && auth.apiKey) {
         this.authType = "api_key";
-        process.env.ANTHROPIC_API_KEY = auth.apiKey;
+        this.envOverrides.ANTHROPIC_API_KEY = auth.apiKey;
       } else {
         this.authType = "oauth";
-        delete process.env.ANTHROPIC_API_KEY;
+        this.envOverrides.ANTHROPIC_API_KEY = undefined;
       }
     }
     logger.info(`[anthropic] Using auth: ${this.authType}`);
+  }
+
+  /** Build env object with instance-specific overrides (avoids mutating process.env) */
+  private buildEnv(): Record<string, string | undefined> {
+    return { ...process.env, ...this.envOverrides };
   }
 
   // Check if there's an active V2 session for a given sessionKey
@@ -709,6 +737,7 @@ class AnthropicClient implements ModelClient {
         const sessionOptions: any = {
           model,
           allowedTools,
+          env: this.buildEnv(),
         };
 
         // Pass through options from the query
@@ -724,8 +753,8 @@ class AnthropicClient implements ModelClient {
           sessionOptions.outputFormat = opts.responseFormat;
         }
         if (opts.providerOptions) {
-          // Copy providerOptions but don't overwrite allowedTools (already handled above)
-          const { allowedTools: _, ...restOptions } = opts.providerOptions;
+          // Copy providerOptions but don't overwrite allowedTools or env (already handled above)
+          const { allowedTools: _, env: _env, ...restOptions } = opts.providerOptions;
           Object.assign(sessionOptions, restOptions);
         }
 
@@ -811,6 +840,7 @@ class AnthropicClient implements ModelClient {
       model,
       permissionMode: "bypassPermissions",
       allowDangerouslySkipPermissions: true,
+      env: this.buildEnv(),
     };
 
     if (opts.systemPrompt) queryOptions.systemPrompt = opts.systemPrompt;
@@ -883,7 +913,7 @@ class AnthropicClient implements ModelClient {
     try {
       const q = query({
         prompt: "test",
-        options: { max_tokens: 10, permissionMode: "bypassPermissions", allowDangerouslySkipPermissions: true } as any,
+        options: { max_tokens: 10, permissionMode: "bypassPermissions", allowDangerouslySkipPermissions: true, env: this.buildEnv() } as any,
       });
       for await (const _ of q) {}
       return true;
@@ -936,6 +966,21 @@ const manifest: PluginManifest = {
         description: "Only needed for API Key auth method",
         secret: true,
         setupFlow: "paste",
+      },
+      {
+        name: "baseUrl",
+        type: "text",
+        label: "Gateway Base URL",
+        required: false,
+        description: "WOPR gateway URL (injected by platform for hosted tenants)",
+      },
+      {
+        name: "tenantToken",
+        type: "password",
+        label: "Tenant Token",
+        required: false,
+        description: "WOPR tenant auth token (injected by platform for hosted tenants)",
+        secret: true,
       },
     ],
   },
@@ -1009,6 +1054,21 @@ const plugin: WOPRPlugin = {
           placeholder: "sk-ant-...",
           required: false,
           description: "Only needed for API Key auth method",
+        },
+        {
+          name: "baseUrl",
+          type: "text",
+          label: "Gateway Base URL",
+          required: false,
+          description: "WOPR gateway URL (injected by platform for hosted tenants)",
+        },
+        {
+          name: "tenantToken",
+          type: "password",
+          label: "Tenant Token",
+          required: false,
+          description: "WOPR tenant auth token (injected by platform for hosted tenants)",
+          secret: true,
         },
       ],
     });
