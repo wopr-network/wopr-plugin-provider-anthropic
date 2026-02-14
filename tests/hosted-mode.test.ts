@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
-// We test the AnthropicClient constructor's env var behavior by importing
-// the class and checking process.env after construction.
+// We test the AnthropicClient constructor's env override behavior by importing
+// the class and checking that process.env is NOT mutated, and that the
+// instance-level env overrides are correct.
 
 // Mock the @anthropic-ai/claude-agent-sdk module before importing our code
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
@@ -69,26 +70,37 @@ describe("AnthropicClient hosted mode", () => {
     }
   });
 
-  it("sets ANTHROPIC_BASE_URL and ANTHROPIC_API_KEY when baseUrl and tenantToken are provided", () => {
+  it("stores env overrides for hosted mode without mutating process.env", () => {
     const gatewayUrl = "https://api.wopr.bot/v1/anthropic";
     const token = "wopr-tenant-token-abc123";
 
-    new AnthropicClient("", {
+    const client = new AnthropicClient("", {
       baseUrl: gatewayUrl,
       tenantToken: token,
     });
 
-    expect(process.env.ANTHROPIC_BASE_URL).toBe(gatewayUrl);
-    expect(process.env.ANTHROPIC_API_KEY).toBe(token);
+    // process.env should NOT be mutated
+    expect(process.env.ANTHROPIC_BASE_URL).toBeUndefined();
+    expect(process.env.ANTHROPIC_API_KEY).toBeUndefined();
+
+    // buildEnv() should return merged env with overrides
+    const env = (client as any).buildEnv();
+    expect(env.ANTHROPIC_BASE_URL).toBe(gatewayUrl);
+    expect(env.ANTHROPIC_API_KEY).toBe(token);
   });
 
-  it("does NOT set ANTHROPIC_BASE_URL when baseUrl is not provided (BYOK)", () => {
+  it("stores env overrides for BYOK without mutating process.env", () => {
     const apiKey = "sk-ant-test-key-123";
 
-    new AnthropicClient(apiKey);
+    const client = new AnthropicClient(apiKey);
 
-    expect(process.env.ANTHROPIC_BASE_URL).toBeUndefined();
-    expect(process.env.ANTHROPIC_API_KEY).toBe(apiKey);
+    // process.env should NOT be mutated
+    expect(process.env.ANTHROPIC_API_KEY).toBeUndefined();
+
+    // buildEnv() should return merged env with overrides
+    const env = (client as any).buildEnv();
+    expect(env.ANTHROPIC_BASE_URL).toBeUndefined();
+    expect(env.ANTHROPIC_API_KEY).toBe(apiKey);
   });
 
   it("uses tenantToken as apiKey in hosted mode, not the credential", () => {
@@ -96,38 +108,68 @@ describe("AnthropicClient hosted mode", () => {
     const tenantToken = "wopr-tenant-token-xyz";
     const byokKey = "sk-ant-should-not-be-used";
 
-    new AnthropicClient(byokKey, {
+    const client = new AnthropicClient(byokKey, {
       baseUrl: gatewayUrl,
       tenantToken: tenantToken,
     });
 
     // tenantToken should be used, not the credential
-    expect(process.env.ANTHROPIC_API_KEY).toBe(tenantToken);
-    expect(process.env.ANTHROPIC_BASE_URL).toBe(gatewayUrl);
+    const env = (client as any).buildEnv();
+    expect(env.ANTHROPIC_API_KEY).toBe(tenantToken);
+    expect(env.ANTHROPIC_BASE_URL).toBe(gatewayUrl);
   });
 
-  it("clears ANTHROPIC_BASE_URL when switching from hosted to BYOK", () => {
-    // First, create a hosted client
-    new AnthropicClient("", {
+  it("multiple instances do not clobber each other's env overrides", () => {
+    const hostedClient = new AnthropicClient("", {
       baseUrl: "https://api.wopr.bot/v1/anthropic",
-      tenantToken: "token",
+      tenantToken: "hosted-token",
     });
-    expect(process.env.ANTHROPIC_BASE_URL).toBe("https://api.wopr.bot/v1/anthropic");
 
-    // Then create a BYOK client - should clear the base URL
-    new AnthropicClient("sk-ant-byok-key");
+    const byokClient = new AnthropicClient("sk-ant-byok-key");
+
+    // Each instance should have its own env overrides
+    const hostedEnv = (hostedClient as any).buildEnv();
+    expect(hostedEnv.ANTHROPIC_BASE_URL).toBe("https://api.wopr.bot/v1/anthropic");
+    expect(hostedEnv.ANTHROPIC_API_KEY).toBe("hosted-token");
+
+    const byokEnv = (byokClient as any).buildEnv();
+    expect(byokEnv.ANTHROPIC_BASE_URL).toBeUndefined();
+    expect(byokEnv.ANTHROPIC_API_KEY).toBe("sk-ant-byok-key");
+
+    // process.env should NOT be mutated by either
     expect(process.env.ANTHROPIC_BASE_URL).toBeUndefined();
-    expect(process.env.ANTHROPIC_API_KEY).toBe("sk-ant-byok-key");
+    expect(process.env.ANTHROPIC_API_KEY).toBeUndefined();
   });
 
   it("requires both baseUrl and tenantToken for hosted mode", () => {
     // baseUrl without tenantToken -> falls through to normal auth
-    new AnthropicClient("", { baseUrl: "https://api.wopr.bot/v1/anthropic" });
-    expect(process.env.ANTHROPIC_BASE_URL).toBeUndefined();
+    const client1 = new AnthropicClient("", { baseUrl: "https://api.wopr.bot/v1/anthropic" });
+    const env1 = (client1 as any).buildEnv();
+    expect(env1.ANTHROPIC_BASE_URL).toBeUndefined();
 
     // tenantToken without baseUrl -> falls through to normal auth
-    delete process.env.ANTHROPIC_API_KEY;
-    new AnthropicClient("", { tenantToken: "token-only" });
-    expect(process.env.ANTHROPIC_BASE_URL).toBeUndefined();
+    const client2 = new AnthropicClient("", { tenantToken: "token-only" });
+    const env2 = (client2 as any).buildEnv();
+    expect(env2.ANTHROPIC_BASE_URL).toBeUndefined();
+  });
+
+  it("rejects non-HTTPS baseUrl", () => {
+    expect(
+      () =>
+        new AnthropicClient("", {
+          baseUrl: "http://evil.example.com/v1",
+          tenantToken: "token",
+        }),
+    ).toThrow("Hosted mode baseUrl must use HTTPS");
+  });
+
+  it("rejects invalid baseUrl", () => {
+    expect(
+      () =>
+        new AnthropicClient("", {
+          baseUrl: "not-a-url",
+          tenantToken: "token",
+        }),
+    ).toThrow("Invalid hosted mode baseUrl");
   });
 });
