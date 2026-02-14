@@ -624,10 +624,21 @@ class AnthropicClient implements ModelClient {
   private authType: string;
 
   constructor(private credential: string, private options?: Record<string, unknown>) {
-    if (credential && credential.startsWith("sk-ant-")) {
+    // Hosted mode: platform injects baseUrl + tenantToken to route through gateway
+    const baseUrl = options?.baseUrl as string | undefined;
+    const tenantToken = options?.tenantToken as string | undefined;
+
+    if (baseUrl && tenantToken) {
+      this.authType = "hosted";
+      process.env.ANTHROPIC_BASE_URL = baseUrl;
+      process.env.ANTHROPIC_API_KEY = tenantToken;
+      logger.info(`[anthropic] Using hosted mode: gateway at ${baseUrl}`);
+    } else if (credential && credential.startsWith("sk-ant-")) {
       this.authType = "api_key";
+      delete process.env.ANTHROPIC_BASE_URL;
       process.env.ANTHROPIC_API_KEY = credential;
     } else {
+      delete process.env.ANTHROPIC_BASE_URL;
       const auth = getAuth();
       if (auth?.type === "oauth" && auth.accessToken) {
         this.authType = "oauth";
@@ -937,6 +948,21 @@ const manifest: PluginManifest = {
         secret: true,
         setupFlow: "paste",
       },
+      {
+        name: "baseUrl",
+        type: "text",
+        label: "Gateway Base URL",
+        required: false,
+        description: "WOPR gateway URL (injected by platform for hosted tenants)",
+      },
+      {
+        name: "tenantToken",
+        type: "password",
+        label: "Tenant Token",
+        required: false,
+        description: "WOPR tenant auth token (injected by platform for hosted tenants)",
+        secret: true,
+      },
     ],
   },
   lifecycle: {
@@ -1009,6 +1035,21 @@ const plugin: WOPRPlugin = {
           placeholder: "sk-ant-...",
           required: false,
           description: "Only needed for API Key auth method",
+        },
+        {
+          name: "baseUrl",
+          type: "text",
+          label: "Gateway Base URL",
+          required: false,
+          description: "WOPR gateway URL (injected by platform for hosted tenants)",
+        },
+        {
+          name: "tenantToken",
+          type: "password",
+          label: "Tenant Token",
+          required: false,
+          description: "WOPR tenant auth token (injected by platform for hosted tenants)",
+          secret: true,
         },
       ],
     });
