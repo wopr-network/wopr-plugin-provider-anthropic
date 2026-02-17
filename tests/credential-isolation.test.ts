@@ -109,16 +109,18 @@ describe("credential isolation in validateCredentials", () => {
       validateCredentials: (cred: string) => Promise<boolean>;
     };
 
-    // Set a "daemon" key in process.env
-    process.env.ANTHROPIC_API_KEY = "sk-ant-daemon-key";
+    try {
+      // Set a "daemon" key in process.env
+      process.env.ANTHROPIC_API_KEY = "sk-ant-daemon-key";
 
-    const result = await provider.validateCredentials("sk-ant-bad-key");
-    expect(result).toBe(false);
+      const result = await provider.validateCredentials("sk-ant-bad-key");
+      expect(result).toBe(false);
 
-    // process.env should still have the daemon key, unmodified
-    expect(process.env.ANTHROPIC_API_KEY).toBe("sk-ant-daemon-key");
-
-    // Clean up
-    delete process.env.ANTHROPIC_API_KEY;
+      // process.env should still have the daemon key, unmodified
+      expect(process.env.ANTHROPIC_API_KEY).toBe("sk-ant-daemon-key");
+    } finally {
+      // Clean up — guaranteed to run even if assertions fail
+      delete process.env.ANTHROPIC_API_KEY;
+    }
   });
 });
