@@ -362,6 +362,7 @@ ${text}`;
         max_tokens: 4096,
         permissionMode: "bypassPermissions",
         allowDangerouslySkipPermissions: true,
+        env: { ...process.env },
       } as any,
     });
 
@@ -494,17 +495,16 @@ const anthropicProvider: ModelProvider & {
       return false;
     }
     try {
-      const oldKey = process.env.ANTHROPIC_API_KEY;
-      process.env.ANTHROPIC_API_KEY = credential;
+      const env = { ...process.env, ANTHROPIC_API_KEY: credential };
       const q = query({
         prompt: "ping",
         options: {
           permissionMode: "bypassPermissions",
           allowDangerouslySkipPermissions: true,
+          env,
         } as any,
       });
       for await (const _ of q) {}
-      process.env.ANTHROPIC_API_KEY = oldKey;
       return true;
     } catch (error) {
       logger.error("[anthropic] Credential validation failed:", error);
