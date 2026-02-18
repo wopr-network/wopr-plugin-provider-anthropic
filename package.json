@@ -28,9 +28,9 @@
   },
   "scripts": {
     "build": "tsc",
-    "check": "biome check src/ && tsc --noEmit",
-    "format": "biome format --write src/",
-    "lint": "biome check src/",
+    "check": "biome check index.ts tests/ && tsc --noEmit",
+    "format": "biome format --write index.ts tests/",
+    "lint": "biome check index.ts tests/",
     "lint:fix": "biome check --fix src/",
     "prepublishOnly": "npm run build",
     "test": "vitest run"
