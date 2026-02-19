@@ -2,7 +2,7 @@
  * Tests for provider-anthropic extension registration (WOP-268)
  */
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock the SDK before importing the plugin
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
