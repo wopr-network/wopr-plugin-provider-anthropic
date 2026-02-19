@@ -1114,6 +1114,26 @@ const plugin: WOPRPlugin = {
 		ctx.registerLLMProvider(anthropicProvider);
 		ctx.log.info("Anthropic provider registered");
 
+		// Register extension for daemon model endpoint enrichment (WOP-268)
+		if (ctx.registerExtension) {
+			ctx.registerExtension("provider-anthropic", {
+				getModelInfo: async () => {
+					const models = await getModelInfo();
+					// Strip any credential-adjacent data — only return display info
+					return models.map((m) => ({
+						id: m.id,
+						name: m.name,
+						contextWindow: m.contextWindow,
+						maxOutput: m.maxOutput,
+						inputPrice: m.inputPrice,
+						outputPrice: m.outputPrice,
+						legacy: m.legacy,
+					}));
+				},
+			});
+			ctx.log.info("Registered provider-anthropic extension");
+		}
+
 		// Kick off model discovery in background (non-blocking)
 		if (activeMethod?.available) {
 			discoverModels()
