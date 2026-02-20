@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@anthropic-ai/claude-agent-sdk':
-        specifier: ^0.2.39
-        version: 0.2.47
+        specifier: ^0.2.49
+        version: 0.2.49
       '@anthropic-ai/claude-code':
         specifier: ^2.1.29
         version: 2.1.47
@@ -39,8 +39,8 @@ importers:
 
 packages:
 
-  '@anthropic-ai/claude-agent-sdk@0.2.47':
-    resolution: {integrity: sha512-tcptBQwLnaUv6f5KiiUUtGduiLUhwV/xT0kPxVG+K2Wws1T/2MLViwIoti3AkJuNJ2qZ5FOwl1YQLHPMeHlYVQ==}
+  '@anthropic-ai/claude-agent-sdk@0.2.49':
+    resolution: {integrity: sha512-3avi409dwuGkPEETpWa0gyJvRMr3b6LxeuW5/sAPCOtLD9WxH9fYltbA5wZoazxTw5mlbXmjDp7JqO1rlmpaIQ==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
       zod: ^4.0.0
@@ -1152,7 +1152,7 @@ packages:
 
 snapshots:
 
-  '@anthropic-ai/claude-agent-sdk@0.2.47':
+  '@anthropic-ai/claude-agent-sdk@0.2.49':
     optionalDependencies:
       '@img/sharp-darwin-arm64': 0.34.5
       '@img/sharp-darwin-x64': 0.34.5
