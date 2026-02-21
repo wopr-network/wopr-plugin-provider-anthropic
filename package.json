@@ -21,7 +21,8 @@
     "claude"
   ],
   "license": "MIT",
-  "main": "index.js",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "name": "@wopr-network/wopr-plugin-provider-anthropic",
   "peerDependencies": {
     "wopr": "^0.0.1"
