@@ -6,22 +6,17 @@
  * 2. API Key - Direct API key (sk-ant-...)
  */
 
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import {
-	query,
-	type SDKMessage,
-	type SDKSession,
-	unstable_v2_createSession,
-	unstable_v2_resumeSession,
+  query,
+  type SDKMessage,
+  type SDKSession,
+  unstable_v2_createSession,
+  unstable_v2_resumeSession,
 } from "@anthropic-ai/claude-agent-sdk";
-import type {
-	ConfigSchema,
-	PluginManifest,
-	WOPRPlugin,
-	WOPRPluginContext,
-} from "@wopr-network/plugin-types";
-import { existsSync, readFileSync } from "fs";
-import { homedir } from "os";
-import { join } from "path";
+import type { PluginManifest, WOPRPlugin, WOPRPluginContext } from "@wopr-network/plugin-types";
 import winston from "winston";
 
 // =============================================================================
@@ -37,90 +32,133 @@ type SDKMessageWithSessionId = SDKMessage & { session_id?: string };
 // =============================================================================
 
 type ThinkingConfig =
-	| { type: "adaptive" }
-	| {
-			type: "enabled";
-			/** Must be within Anthropic's supported min/max range for the chosen model. */
-			budgetTokens: number;
-	  }
-	| { type: "disabled" };
+  | { type: "adaptive" }
+  | {
+      type: "enabled";
+      /** Must be within Anthropic's supported min/max range for the chosen model. */
+      budgetTokens: number;
+    }
+  | { type: "disabled" };
 
 /**
  * Structured output format using JSON Schema constrained decoding.
  * GA on Claude Opus 4.6, Sonnet 4.5, Opus 4.5, Haiku 4.5.
  */
 type ResponseFormat =
-	| {
-			type: "json_schema";
-			/** A JSON Schema object describing the expected response structure. */
-			schema: Record<string, unknown>;
-	  }
-	| { type: "text" };
+  | {
+      type: "json_schema";
+      /** A JSON Schema object describing the expected response structure. */
+      schema: Record<string, unknown>;
+    }
+  | { type: "text" };
 
 interface ModelQueryOptions {
-	prompt: string;
-	systemPrompt?: string;
-	resume?: string;
-	model?: string;
-	temperature?: number;
-	maxTokens?: number;
-	topP?: number;
-	images?: string[];
-	mcpServers?: Record<string, unknown>;
-	providerOptions?: Record<string, unknown>;
-	/** Controls extended thinking / chain-of-thought reasoning. */
-	thinking?: ThinkingConfig;
-	/** Controls effort level — works with adaptive thinking to guide depth. */
-	effort?: "low" | "medium" | "high" | "max";
-	/** Enable beta features, e.g. 'context-1m-2025-08-07' for 1M context. */
-	betas?: string[];
-	/**
-	 * Request structured JSON output conforming to a schema.
-	 * Uses Anthropic's constrained decoding — the model cannot produce tokens
-	 * that violate the schema. Supported on Opus 4.6, Sonnet 4.5, Opus 4.5, Haiku 4.5.
-	 */
-	responseFormat?: ResponseFormat;
+  prompt: string;
+  systemPrompt?: string;
+  resume?: string;
+  model?: string;
+  temperature?: number;
+  maxTokens?: number;
+  topP?: number;
+  images?: string[];
+  mcpServers?: Record<string, unknown>;
+  providerOptions?: Record<string, unknown>;
+  /** Controls extended thinking / chain-of-thought reasoning. */
+  thinking?: ThinkingConfig;
+  /** Controls effort level — works with adaptive thinking to guide depth. */
+  effort?: "low" | "medium" | "high" | "max";
+  /** Enable beta features, e.g. 'context-1m-2025-08-07' for 1M context. */
+  betas?: string[];
+  /**
+   * Request structured JSON output conforming to a schema.
+   * Uses Anthropic's constrained decoding — the model cannot produce tokens
+   * that violate the schema. Supported on Opus 4.6, Sonnet 4.5, Opus 4.5, Haiku 4.5.
+   */
+  responseFormat?: ResponseFormat;
 }
 
 interface ModelClient {
-	query(options: ModelQueryOptions): AsyncGenerator<unknown>;
-	listModels(): Promise<string[]>;
-	healthCheck(): Promise<boolean>;
-	// V2 Session API - for injecting messages into active sessions
-	hasActiveSession?(sessionKey: string): boolean;
-	sendToActiveSession?(sessionKey: string, message: string): Promise<void>;
-	getActiveSessionStream?(sessionKey: string): AsyncGenerator<unknown> | null;
-	closeSession?(sessionKey: string): void;
-	// V2 query with session key for active session tracking
-	queryV2?(
-		options: ModelQueryOptions & { sessionKey: string },
-	): AsyncGenerator<unknown>;
+  query(options: ModelQueryOptions): AsyncGenerator<unknown>;
+  listModels(): Promise<string[]>;
+  healthCheck(): Promise<boolean>;
+  // V2 Session API - for injecting messages into active sessions
+  hasActiveSession?(sessionKey: string): boolean;
+  sendToActiveSession?(sessionKey: string, message: string): Promise<void>;
+  getActiveSessionStream?(sessionKey: string): AsyncGenerator<unknown> | null;
+  closeSession?(sessionKey: string): void;
+  // V2 query with session key for active session tracking
+  queryV2?(options: ModelQueryOptions & { sessionKey: string }): AsyncGenerator<unknown>;
 }
 
 interface ModelProvider {
-	id: string;
-	name: string;
-	description: string;
-	defaultModel: string;
-	supportedModels: string[];
-	validateCredentials(credentials: string): Promise<boolean>;
-	createClient(
-		credential: string,
-		options?: Record<string, unknown>,
-	): Promise<ModelClient>;
-	getCredentialType(): "api-key" | "oauth" | "custom";
+  id: string;
+  name: string;
+  description: string;
+  defaultModel: string;
+  supportedModels: string[];
+  validateCredentials(credentials: string): Promise<boolean>;
+  createClient(credential: string, options?: Record<string, unknown>): Promise<ModelClient>;
+  getCredentialType(): "api-key" | "oauth" | "custom";
 }
 
 const logger = winston.createLogger({
-	level: "info",
-	format: winston.format.combine(
-		winston.format.timestamp(),
-		winston.format.errors({ stack: true }),
-		winston.format.json(),
-	),
-	defaultMeta: { service: "wopr-plugin-provider-anthropic" },
-	transports: [new winston.transports.Console({ level: "warn" })],
+  level: "info",
+  format: winston.format.combine(
+    winston.format.timestamp(),
+    winston.format.errors({ stack: true }),
+    winston.format.json(),
+  ),
+  defaultMeta: { service: "wopr-plugin-provider-anthropic" },
+  transports: [new winston.transports.Console({ level: "warn" })],
 });
+
+// =============================================================================
+// Retry / Exponential Backoff
+// =============================================================================
+
+interface RetryOptions {
+  maxRetries?: number;
+  baseDelayMs?: number;
+  retryableStatusCodes?: number[];
+}
+
+export async function retryWithBackoff<T>(
+  fn: () => Promise<T>,
+  opts: RetryOptions = {},
+  logger: { warn: (msg: string) => void },
+): Promise<T> {
+  const maxRetries = opts.maxRetries ?? 3;
+  const baseDelayMs = opts.baseDelayMs ?? 1000;
+  const retryableCodes = opts.retryableStatusCodes ?? [429, 503];
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error: unknown) {
+      if (attempt === maxRetries) throw error;
+
+      const msg = error instanceof Error ? error.message : String(error);
+      const status = (error as any)?.status ?? (error as any)?.statusCode;
+      const isRetryable =
+        (status && retryableCodes.includes(status)) ||
+        msg.includes("ECONNRESET") ||
+        msg.includes("ECONNREFUSED") ||
+        msg.includes("ETIMEDOUT") ||
+        msg.includes("fetch failed") ||
+        msg.includes("network") ||
+        msg.includes("socket hang up");
+
+      if (!isRetryable) throw error;
+
+      const delay = baseDelayMs * 2 ** attempt;
+      logger.warn(
+        `[retry] Attempt ${attempt + 1}/${maxRetries} failed (${status || msg.slice(0, 80)}), retrying in ${delay}ms`,
+      );
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  throw new Error("unreachable");
+}
 
 // =============================================================================
 // Auth Detection - exposed for onboarding
@@ -130,49 +168,49 @@ const CLAUDE_CODE_CREDENTIALS = join(homedir(), ".claude", ".credentials.json");
 const WOPR_AUTH_FILE = join(homedir(), ".wopr", "auth.json");
 
 interface AuthState {
-	type: "oauth" | "api_key";
-	accessToken?: string;
-	refreshToken?: string;
-	expiresAt?: number;
-	apiKey?: string;
-	email?: string;
+  type: "oauth" | "api_key";
+  accessToken?: string;
+  refreshToken?: string;
+  expiresAt?: number;
+  apiKey?: string;
+  email?: string;
 }
 
 function loadClaudeCodeCredentials(): AuthState | null {
-	if (!existsSync(CLAUDE_CODE_CREDENTIALS)) return null;
-	try {
-		const data = JSON.parse(readFileSync(CLAUDE_CODE_CREDENTIALS, "utf-8"));
-		const oauth = data.claudeAiOauth;
-		if (oauth?.accessToken) {
-			return {
-				type: "oauth",
-				accessToken: oauth.accessToken,
-				refreshToken: oauth.refreshToken,
-				expiresAt: oauth.expiresAt,
-				email: oauth.email,
-			};
-		}
-		return null;
-	} catch {
-		return null;
-	}
+  if (!existsSync(CLAUDE_CODE_CREDENTIALS)) return null;
+  try {
+    const data = JSON.parse(readFileSync(CLAUDE_CODE_CREDENTIALS, "utf-8"));
+    const oauth = data.claudeAiOauth;
+    if (oauth?.accessToken) {
+      return {
+        type: "oauth",
+        accessToken: oauth.accessToken,
+        refreshToken: oauth.refreshToken,
+        expiresAt: oauth.expiresAt,
+        email: oauth.email,
+      };
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 function loadWoprAuth(): AuthState | null {
-	if (!existsSync(WOPR_AUTH_FILE)) return null;
-	try {
-		return JSON.parse(readFileSync(WOPR_AUTH_FILE, "utf-8"));
-	} catch {
-		return null;
-	}
+  if (!existsSync(WOPR_AUTH_FILE)) return null;
+  try {
+    return JSON.parse(readFileSync(WOPR_AUTH_FILE, "utf-8"));
+  } catch {
+    return null;
+  }
 }
 
 function getAuth(): AuthState | null {
-	const claudeCodeAuth = loadClaudeCodeCredentials();
-	if (claudeCodeAuth) return claudeCodeAuth;
-	const woprAuth = loadWoprAuth();
-	if (woprAuth) return woprAuth;
-	return null;
+  const claudeCodeAuth = loadClaudeCodeCredentials();
+  if (claudeCodeAuth) return claudeCodeAuth;
+  const woprAuth = loadWoprAuth();
+  if (woprAuth) return woprAuth;
+  return null;
 }
 
 // =============================================================================
@@ -180,152 +218,213 @@ function getAuth(): AuthState | null {
 // =============================================================================
 
 export interface AuthMethodInfo {
-	id: string;
-	name: string;
-	description: string;
-	available: boolean; // Is this auth method currently usable?
-	requiresInput: boolean; // Does user need to enter something?
-	inputType?: "password" | "text";
-	inputLabel?: string;
-	inputPlaceholder?: string;
-	setupInstructions?: string[];
-	docsUrl?: string;
+  id: string;
+  name: string;
+  description: string;
+  available: boolean; // Is this auth method currently usable?
+  requiresInput: boolean; // Does user need to enter something?
+  inputType?: "password" | "text";
+  inputLabel?: string;
+  inputPlaceholder?: string;
+  setupInstructions?: string[];
+  docsUrl?: string;
 }
 
 function getAuthMethods(): AuthMethodInfo[] {
-	const oauthCreds = loadClaudeCodeCredentials();
+  const oauthCreds = loadClaudeCodeCredentials();
 
-	return [
-		{
-			id: "oauth",
-			name: "Claude Pro/Max (OAuth)",
-			description: "Use your Claude subscription - no per-token costs",
-			available: !!oauthCreds,
-			requiresInput: false,
-			setupInstructions: oauthCreds
-				? [`Logged in as: ${oauthCreds.email || "Claude user"}`]
-				: ["Run: claude login", "Then restart WOPR"],
-			docsUrl: "https://claude.ai/settings",
-		},
-		{
-			id: "api-key",
-			name: "API Key (pay-per-use)",
-			description: "Direct API access - billed per token",
-			available: true,
-			requiresInput: true,
-			inputType: "password",
-			inputLabel: "Anthropic API Key",
-			inputPlaceholder: "sk-ant-...",
-			docsUrl: "https://console.anthropic.com/",
-		},
-		{
-			id: "bedrock",
-			name: "Amazon Bedrock",
-			description: "Claude via AWS",
-			available: !!process.env.AWS_REGION && !!process.env.AWS_ACCESS_KEY_ID,
-			requiresInput: false,
-			setupInstructions: [
-				"Set environment variables:",
-				"  AWS_REGION",
-				"  AWS_ACCESS_KEY_ID",
-				"  AWS_SECRET_ACCESS_KEY",
-			],
-			docsUrl: "https://docs.aws.amazon.com/bedrock/",
-		},
-		{
-			id: "vertex",
-			name: "Google Vertex AI",
-			description: "Claude via Google Cloud",
-			available:
-				!!process.env.CLOUD_ML_REGION &&
-				!!process.env.ANTHROPIC_VERTEX_PROJECT_ID,
-			requiresInput: false,
-			setupInstructions: [
-				"Set environment variables:",
-				"  CLOUD_ML_REGION",
-				"  ANTHROPIC_VERTEX_PROJECT_ID",
-			],
-			docsUrl: "https://cloud.google.com/vertex-ai/docs",
-		},
-		{
-			id: "foundry",
-			name: "Microsoft Foundry",
-			description: "Claude via Azure",
-			available: !!process.env.ANTHROPIC_FOUNDRY_RESOURCE,
-			requiresInput: false,
-			setupInstructions: [
-				"Set environment variables:",
-				"  ANTHROPIC_FOUNDRY_RESOURCE",
-				"  ANTHROPIC_FOUNDRY_API_KEY (optional)",
-			],
-			docsUrl: "https://azure.microsoft.com/",
-		},
-	];
+  return [
+    {
+      id: "oauth",
+      name: "Claude Pro/Max (OAuth)",
+      description: "Use your Claude subscription - no per-token costs",
+      available: !!oauthCreds,
+      requiresInput: false,
+      setupInstructions: oauthCreds
+        ? [`Logged in as: ${oauthCreds.email || "Claude user"}`]
+        : ["Run: claude login", "Then restart WOPR"],
+      docsUrl: "https://claude.ai/settings",
+    },
+    {
+      id: "api-key",
+      name: "API Key (pay-per-use)",
+      description: "Direct API access - billed per token",
+      available: true,
+      requiresInput: true,
+      inputType: "password",
+      inputLabel: "Anthropic API Key",
+      inputPlaceholder: "sk-ant-...",
+      docsUrl: "https://console.anthropic.com/",
+    },
+    {
+      id: "bedrock",
+      name: "Amazon Bedrock",
+      description: "Claude via AWS",
+      available: !!process.env.AWS_REGION && !!process.env.AWS_ACCESS_KEY_ID,
+      requiresInput: false,
+      setupInstructions: [
+        "Set environment variables:",
+        "  AWS_REGION",
+        "  AWS_ACCESS_KEY_ID",
+        "  AWS_SECRET_ACCESS_KEY",
+      ],
+      docsUrl: "https://docs.aws.amazon.com/bedrock/",
+    },
+    {
+      id: "vertex",
+      name: "Google Vertex AI",
+      description: "Claude via Google Cloud",
+      available: !!process.env.CLOUD_ML_REGION && !!process.env.ANTHROPIC_VERTEX_PROJECT_ID,
+      requiresInput: false,
+      setupInstructions: ["Set environment variables:", "  CLOUD_ML_REGION", "  ANTHROPIC_VERTEX_PROJECT_ID"],
+      docsUrl: "https://cloud.google.com/vertex-ai/docs",
+    },
+    {
+      id: "foundry",
+      name: "Microsoft Foundry",
+      description: "Claude via Azure",
+      available: !!process.env.ANTHROPIC_FOUNDRY_RESOURCE,
+      requiresInput: false,
+      setupInstructions: [
+        "Set environment variables:",
+        "  ANTHROPIC_FOUNDRY_RESOURCE",
+        "  ANTHROPIC_FOUNDRY_API_KEY (optional)",
+      ],
+      docsUrl: "https://azure.microsoft.com/",
+    },
+  ];
 }
 
 function getActiveAuthMethod(): string {
-	const auth = getAuth();
-	if (auth?.type === "oauth") return "oauth";
-	if (auth?.type === "api_key") return "api-key";
-	if (process.env.CLAUDE_CODE_USE_BEDROCK) return "bedrock";
-	if (process.env.CLAUDE_CODE_USE_VERTEX) return "vertex";
-	if (process.env.CLAUDE_CODE_USE_FOUNDRY) return "foundry";
-	// Check if OAuth is available even if not explicitly set
-	if (loadClaudeCodeCredentials()) return "oauth";
-	return "none";
+  const auth = getAuth();
+  if (auth?.type === "oauth") return "oauth";
+  if (auth?.type === "api_key") return "api-key";
+  if (process.env.CLAUDE_CODE_USE_BEDROCK) return "bedrock";
+  if (process.env.CLAUDE_CODE_USE_VERTEX) return "vertex";
+  if (process.env.CLAUDE_CODE_USE_FOUNDRY) return "foundry";
+  // Check if OAuth is available even if not explicitly set
+  if (loadClaudeCodeCredentials()) return "oauth";
+  return "none";
 }
 
 function hasCredentials(): boolean {
-	return getActiveAuthMethod() !== "none";
+  return getActiveAuthMethod() !== "none";
 }
 
 // =============================================================================
 // Dynamic Model Discovery
 // =============================================================================
 
-const MODELS_PAGE_URL =
-	"https://docs.anthropic.com/en/docs/about-claude/models/overview";
+const MODELS_PAGE_URL = "https://docs.anthropic.com/en/docs/about-claude/models/overview";
 const MODEL_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
 
 // Hardcoded fallback (used only if fetch + cache both fail)
 const FALLBACK_MODEL_IDS = [
-	"claude-opus-4-6",
-	"claude-sonnet-4-5-20250929",
-	"claude-haiku-4-5-20251001",
-	"claude-sonnet-4-20250514",
-	"claude-opus-4-5-20251101",
+  "claude-opus-4-6",
+  "claude-sonnet-4-5-20250929",
+  "claude-haiku-4-5-20251001",
+  "claude-sonnet-4-20250514",
+  "claude-opus-4-5-20251101",
 ];
 
 interface DiscoveredModel {
-	id: string;
-	name: string;
-	contextWindow: string;
-	maxOutput: string;
-	inputPrice: number;
-	outputPrice: number;
-	legacy: boolean;
+  id: string;
+  name: string;
+  contextWindow: string;
+  maxOutput: string;
+  inputPrice: number;
+  outputPrice: number;
+  legacy: boolean;
 }
 
 interface ModelCacheEntry {
-	models: DiscoveredModel[];
-	fetchedAt: number;
+  models: DiscoveredModel[];
+  fetchedAt: number;
 }
 
 let modelCache: ModelCacheEntry | null = null;
 
 function stripHtml(html: string): string {
-	return html
-		.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
-		.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-		.replace(/<[^>]+>/g, " ")
-		.replace(/&nbsp;/g, " ")
-		.replace(/&amp;/g, "&")
-		.replace(/&lt;/g, "<")
-		.replace(/&gt;/g, ">")
-		.replace(/&quot;/g, '"')
-		.replace(/&#39;/g, "'")
-		.replace(/\s+/g, " ")
-		.trim();
+  // Extract plain text from HTML for LLM consumption.
+  // Process character by character to avoid regex-based incomplete sanitization.
+  let result = "";
+  let i = 0;
+  const len = html.length;
+  while (i < len) {
+    if (html[i] === "<") {
+      // Skip entire tag including contents for script/style elements
+      i++; // skip '<'
+      // Check if this is a closing tag
+      const isClose = i < len && html[i] === "/";
+      if (isClose) i++;
+      // Read tag name
+      let tagName = "";
+      while (
+        i < len &&
+        html[i] !== ">" &&
+        html[i] !== " " &&
+        html[i] !== "\t" &&
+        html[i] !== "\n" &&
+        html[i] !== "\r"
+      ) {
+        tagName += html[i].toLowerCase();
+        i++;
+      }
+      // Skip to end of opening tag
+      while (i < len && html[i] !== ">") i++;
+      if (i < len) i++; // skip '>'
+      // For script/style, skip until closing tag
+      if (!isClose && (tagName === "script" || tagName === "style")) {
+        const closeTag = `</${tagName}`;
+        const closeIdx = html.toLowerCase().indexOf(closeTag, i);
+        if (closeIdx !== -1) {
+          i = closeIdx + closeTag.length;
+          // Skip to end of closing tag
+          while (i < len && html[i] !== ">") i++;
+          if (i < len) i++; // skip '>'
+        } else {
+          i = len; // no closing tag found, skip rest
+        }
+      } else {
+        result += " "; // replace tag with space
+      }
+    } else if (html[i] === "&") {
+      // Decode HTML entity
+      const semi = html.indexOf(";", i);
+      if (semi !== -1 && semi - i <= 10) {
+        const entity = html.slice(i + 1, semi);
+        i = semi + 1;
+        switch (entity) {
+          case "nbsp":
+            result += " ";
+            break;
+          case "amp":
+            result += "&";
+            break;
+          case "lt":
+            result += "<";
+            break;
+          case "gt":
+            result += ">";
+            break;
+          case "quot":
+            result += '"';
+            break;
+          case "#39":
+            result += "'";
+            break;
+          default:
+            result += " ";
+            break;
+        }
+      } else {
+        result += html[i++];
+      }
+    } else {
+      result += html[i++];
+    }
+  }
+  return result.replace(/\s+/g, " ").trim();
 }
 
 /**
@@ -333,21 +432,21 @@ function stripHtml(html: string): string {
  * Results are cached for 24 hours. Falls back to hardcoded list on failure.
  */
 async function discoverModels(): Promise<DiscoveredModel[]> {
-	// Return cache if fresh
-	if (modelCache && Date.now() - modelCache.fetchedAt < MODEL_CACHE_TTL) {
-		return modelCache.models;
-	}
+  // Return cache if fresh
+  if (modelCache && Date.now() - modelCache.fetchedAt < MODEL_CACHE_TTL) {
+    return modelCache.models;
+  }
 
-	try {
-		// Step 1: Fetch the models overview page
-		logger.info("[anthropic] Fetching models from Anthropic docs...");
-		const response = await fetch(MODELS_PAGE_URL);
-		if (!response.ok) throw new Error(`HTTP ${response.status}`);
-		const html = await response.text();
-		const text = stripHtml(html).slice(0, 60000); // Keep under token limits
+  try {
+    // Step 1: Fetch the models overview page
+    logger.info("[anthropic] Fetching models from Anthropic docs...");
+    const response = await fetch(MODELS_PAGE_URL);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const html = await response.text();
+    const text = stripHtml(html).slice(0, 60000); // Keep under token limits
 
-		// Step 2: Ask Haiku to extract model info
-		const extractionPrompt = `Extract ALL Claude model information from this documentation page.
+    // Step 2: Ask Haiku to extract model info
+    const extractionPrompt = `Extract ALL Claude model information from this documentation page.
 
 Return ONLY a valid JSON array. Each object must have exactly these fields:
 - "id": string - the Claude API model ID (e.g. "claude-opus-4-6")
@@ -363,122 +462,112 @@ Include ALL models: current AND legacy. Return ONLY the JSON array.
 Page content:
 ${text}`;
 
-		const q = query({
-			prompt: extractionPrompt,
-			options: {
-				model: "claude-haiku-4-5-20251001",
-				max_tokens: 4096,
-				permissionMode: "bypassPermissions",
-				allowDangerouslySkipPermissions: true,
-				env: { ...process.env },
-			} as any,
-		});
+    const q = query({
+      prompt: extractionPrompt,
+      options: {
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 4096,
+        permissionMode: "bypassPermissions",
+        allowDangerouslySkipPermissions: true,
+        env: { ...process.env },
+      } as any,
+    });
 
-		// Collect text from Haiku's response
-		let result = "";
-		for await (const msg of q) {
-			const m = msg as any;
-			if (m.type === "assistant" && m.message?.content) {
-				for (const block of m.message.content) {
-					if (block.type === "text") result += block.text;
-				}
-			}
-		}
+    // Collect text from Haiku's response
+    let result = "";
+    for await (const msg of q) {
+      const m = msg as any;
+      if (m.type === "assistant" && m.message?.content) {
+        for (const block of m.message.content) {
+          if (block.type === "text") result += block.text;
+        }
+      }
+    }
 
-		// Parse JSON from response
-		const jsonMatch = result.match(/\[[\s\S]*\]/);
-		if (!jsonMatch) throw new Error("No JSON array in Haiku response");
+    // Parse JSON from response
+    const jsonMatch = result.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) throw new Error("No JSON array in Haiku response");
 
-		const models: DiscoveredModel[] = JSON.parse(jsonMatch[0]);
-		if (!Array.isArray(models) || models.length === 0) {
-			throw new Error("Empty or invalid model array");
-		}
+    const models: DiscoveredModel[] = JSON.parse(jsonMatch[0]);
+    if (!Array.isArray(models) || models.length === 0) {
+      throw new Error("Empty or invalid model array");
+    }
 
-		// Validate each model has required fields
-		for (const model of models) {
-			if (!model.id || typeof model.id !== "string") {
-				throw new Error(`Invalid model entry: missing id`);
-			}
-		}
+    // Validate each model has required fields
+    for (const model of models) {
+      if (!model.id || typeof model.id !== "string") {
+        throw new Error(`Invalid model entry: missing id`);
+      }
+    }
 
-		// Cache the results
-		modelCache = { models, fetchedAt: Date.now() };
-		logger.info(
-			`[anthropic] Discovered ${models.length} models from Anthropic docs`,
-		);
+    // Cache the results
+    modelCache = { models, fetchedAt: Date.now() };
+    logger.info(`[anthropic] Discovered ${models.length} models from Anthropic docs`);
 
-		// Update the provider's supportedModels list
-		anthropicProvider.supportedModels = models.map((m) => m.id);
+    // Update the provider's supportedModels list
+    anthropicProvider.supportedModels = models.map((m) => m.id);
 
-		// Update defaultModel to latest non-legacy model
-		const currentModels = models.filter((m) => !m.legacy);
-		if (currentModels.length > 0) {
-			anthropicProvider.defaultModel = currentModels[0].id;
-		}
+    // Update defaultModel to latest non-legacy model
+    const currentModels = models.filter((m) => !m.legacy);
+    if (currentModels.length > 0) {
+      anthropicProvider.defaultModel = currentModels[0].id;
+    }
 
-		return models;
-	} catch (error) {
-		logger.warn(
-			`[anthropic] Model discovery failed: ${error instanceof Error ? error.message : String(error)}`,
-		);
+    return models;
+  } catch (error) {
+    logger.warn(`[anthropic] Model discovery failed: ${error instanceof Error ? error.message : String(error)}`);
 
-		// Return stale cache if available
-		if (modelCache) {
-			logger.info("[anthropic] Using stale model cache");
-			return modelCache.models;
-		}
+    // Return stale cache if available
+    if (modelCache) {
+      logger.info("[anthropic] Using stale model cache");
+      return modelCache.models;
+    }
 
-		// Ultimate fallback — context windows reflect 1M beta availability
-		logger.info("[anthropic] Using hardcoded fallback models");
-		return FALLBACK_MODEL_IDS.map((id) => ({
-			id,
-			name: id,
-			contextWindow:
-				id.includes("sonnet") || id.includes("opus")
-					? "200K (1M with beta)"
-					: "200K",
-			maxOutput: id.includes("haiku") ? "8K" : "128K",
-			inputPrice: 0,
-			outputPrice: 0,
-			legacy: false,
-		}));
-	}
+    // Ultimate fallback — context windows reflect 1M beta availability
+    logger.info("[anthropic] Using hardcoded fallback models");
+    return FALLBACK_MODEL_IDS.map((id) => ({
+      id,
+      name: id,
+      contextWindow: id.includes("sonnet") || id.includes("opus") ? "200K (1M with beta)" : "200K",
+      maxOutput: id.includes("haiku") ? "8K" : "128K",
+      inputPrice: 0,
+      outputPrice: 0,
+      legacy: false,
+    }));
+  }
 }
 
 /**
  * Get discovered models (cached). Non-blocking - returns fallback if not yet fetched.
  */
-function getDiscoveredModelIds(): string[] {
-	if (modelCache) return modelCache.models.map((m) => m.id);
-	return FALLBACK_MODEL_IDS;
+function _getDiscoveredModelIds(): string[] {
+  if (modelCache) return modelCache.models.map((m) => m.id);
+  return FALLBACK_MODEL_IDS;
 }
 
 /**
  * Get full model info for display/selection
  */
 async function getModelInfo(): Promise<DiscoveredModel[]> {
-	return discoverModels();
+  return discoverModels();
 }
 
 // =============================================================================
 // Image handling
 // =============================================================================
 
-async function downloadImageAsBase64(
-	url: string,
-): Promise<{ data: string; mediaType: string } | null> {
-	try {
-		const response = await fetch(url);
-		if (!response.ok)
-			throw new Error(`Failed to fetch image: ${response.status}`);
-		const contentType = response.headers.get("content-type") || "image/jpeg";
-		const buffer = await response.arrayBuffer();
-		const base64 = Buffer.from(buffer).toString("base64");
-		return { data: base64, mediaType: contentType };
-	} catch (error) {
-		logger.error(`[anthropic] Failed to download image ${url}:`, error);
-		return null;
-	}
+async function downloadImageAsBase64(url: string): Promise<{ data: string; mediaType: string } | null> {
+  try {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`Failed to fetch image: ${response.status}`);
+    const contentType = response.headers.get("content-type") || "image/jpeg";
+    const buffer = await response.arrayBuffer();
+    const base64 = Buffer.from(buffer).toString("base64");
+    return { data: base64, mediaType: contentType };
+  } catch (error) {
+    logger.error(`[anthropic] Failed to download image ${url}:`, error);
+    return null;
+  }
 }
 
 // =============================================================================
@@ -486,64 +575,61 @@ async function downloadImageAsBase64(
 // =============================================================================
 
 const anthropicProvider: ModelProvider & {
-	getAuthMethods: () => AuthMethodInfo[];
-	getActiveAuthMethod: () => string;
-	hasCredentials: () => boolean;
-	getModelInfo: () => Promise<DiscoveredModel[]>;
+  getAuthMethods: () => AuthMethodInfo[];
+  getActiveAuthMethod: () => string;
+  hasCredentials: () => boolean;
+  getModelInfo: () => Promise<DiscoveredModel[]>;
 } = {
-	id: "anthropic",
-	name: "Anthropic Claude",
-	description: "Claude via OAuth, API Key, or cloud providers",
-	defaultModel: FALLBACK_MODEL_IDS[0],
-	supportedModels: [...FALLBACK_MODEL_IDS],
+  id: "anthropic",
+  name: "Anthropic Claude",
+  description: "Claude via OAuth, API Key, or cloud providers",
+  defaultModel: FALLBACK_MODEL_IDS[0],
+  supportedModels: [...FALLBACK_MODEL_IDS],
 
-	// Onboarding helpers
-	getAuthMethods,
-	getActiveAuthMethod,
-	hasCredentials,
-	getModelInfo,
+  // Onboarding helpers
+  getAuthMethods,
+  getActiveAuthMethod,
+  hasCredentials,
+  getModelInfo,
 
-	async validateCredentials(credential: string): Promise<boolean> {
-		// Empty credential is valid if we have OAuth or env-based auth
-		if (!credential || credential === "") {
-			return hasCredentials();
-		}
-		// API key format
-		if (!credential.startsWith("sk-ant-")) {
-			return false;
-		}
-		try {
-			const env = { ...process.env, ANTHROPIC_API_KEY: credential };
-			const q = query({
-				prompt: "ping",
-				options: {
-					permissionMode: "bypassPermissions",
-					allowDangerouslySkipPermissions: true,
-					env,
-				} as any,
-			});
-			for await (const _ of q) {
-			}
-			return true;
-		} catch (error) {
-			logger.error("[anthropic] Credential validation failed:", error);
-			return false;
-		}
-	},
+  async validateCredentials(credential: string): Promise<boolean> {
+    // Empty credential is valid if we have OAuth or env-based auth
+    if (!credential || credential === "") {
+      return hasCredentials();
+    }
+    // API key format
+    if (!credential.startsWith("sk-ant-")) {
+      return false;
+    }
+    try {
+      const env = { ...process.env, ANTHROPIC_API_KEY: credential };
+      const q = query({
+        prompt: "ping",
+        options: {
+          permissionMode: "bypassPermissions",
+          allowDangerouslySkipPermissions: true,
+          env,
+        } as any,
+      });
+      for await (const _ of q) {
+      }
+      return true;
+    } catch (error) {
+      logger.error("[anthropic] Credential validation failed:", error);
+      return false;
+    }
+  },
 
-	async createClient(
-		credential: string,
-		options?: Record<string, unknown>,
-	): Promise<ModelClient> {
-		return new AnthropicClient(credential, options);
-	},
+  async createClient(credential: string, options?: Record<string, unknown>): Promise<ModelClient> {
+    return new AnthropicClient(credential, options);
+  },
 
-	getCredentialType(): "api-key" | "oauth" | "custom" {
-		const active = getActiveAuthMethod();
-		if (active === "oauth") return "oauth";
-		if (active === "api-key") return "api-key";
-		return "oauth"; // Default to OAuth for env-based methods
-	},
+  getCredentialType(): "api-key" | "oauth" | "custom" {
+    const active = getActiveAuthMethod();
+    if (active === "oauth") return "oauth";
+    if (active === "api-key") return "api-key";
+    return "oauth"; // Default to OAuth for env-based methods
+  },
 };
 
 // =============================================================================
@@ -551,13 +637,13 @@ const anthropicProvider: ModelProvider & {
 // =============================================================================
 
 interface ActiveSession {
-	session: SDKSession;
-	sessionId: string | null; // SDK session ID (from Claude)
-	model: string;
-	createdAt: number;
-	lastMessageAt: number;
-	streaming: boolean;
-	streamGenerator: AsyncGenerator<SDKMessage, void> | null;
+  session: SDKSession;
+  sessionId: string | null; // SDK session ID (from Claude)
+  model: string;
+  createdAt: number;
+  lastMessageAt: number;
+  streaming: boolean;
+  streamGenerator: AsyncGenerator<SDKMessage, void> | null;
 }
 
 // Global map of active V2 sessions by sessionKey (WOPR's session identifier)
@@ -570,445 +656,430 @@ const sessionLocks = new Map<string, Promise<void>>();
 const SESSION_TIMEOUT_MS = 30 * 60 * 1000;
 
 // Default allowed tools for V2 sessions (can be overridden via providerOptions.allowedTools)
-const DEFAULT_ALLOWED_TOOLS = [
-	"Read",
-	"Write",
-	"Edit",
-	"Glob",
-	"Grep",
-	"Bash",
-	"WebFetch",
-	"WebSearch",
-];
+const DEFAULT_ALLOWED_TOOLS = ["Read", "Write", "Edit", "Glob", "Grep", "Bash", "WebFetch", "WebSearch"];
 
 // Store interval ID for cleanup on shutdown
 let cleanupIntervalId: ReturnType<typeof setInterval> | null = null;
 
 // Start cleanup interval
 function startCleanupInterval() {
-	if (cleanupIntervalId) return; // Already running
+  if (cleanupIntervalId) return; // Already running
 
-	cleanupIntervalId = setInterval(
-		() => {
-			const now = Date.now();
-			for (const [key, session] of activeSessions.entries()) {
-				if (
-					now - session.lastMessageAt > SESSION_TIMEOUT_MS &&
-					!session.streaming
-				) {
-					logger.info(`[anthropic] Cleaning up stale V2 session: ${key}`);
-					try {
-						session.session.close();
-					} catch (e) {
-						// Ignore close errors
-					}
-					activeSessions.delete(key);
-				}
-			}
-		},
-		5 * 60 * 1000,
-	); // Check every 5 minutes
+  cleanupIntervalId = setInterval(
+    () => {
+      const now = Date.now();
+      for (const [key, session] of activeSessions.entries()) {
+        if (now - session.lastMessageAt > SESSION_TIMEOUT_MS && !session.streaming) {
+          logger.info(`[anthropic] Cleaning up stale V2 session: ${key}`);
+          try {
+            session.session.close();
+          } catch (_e) {
+            // Ignore close errors
+          }
+          activeSessions.delete(key);
+        }
+      }
+    },
+    5 * 60 * 1000,
+  ); // Check every 5 minutes
 }
 
 // Stop cleanup interval and close all sessions (for shutdown)
 function stopCleanupAndCloseSessions() {
-	if (cleanupIntervalId) {
-		clearInterval(cleanupIntervalId);
-		cleanupIntervalId = null;
-	}
+  if (cleanupIntervalId) {
+    clearInterval(cleanupIntervalId);
+    cleanupIntervalId = null;
+  }
 
-	// Close all active sessions
-	for (const [key, session] of activeSessions.entries()) {
-		logger.info(`[anthropic] Closing V2 session on shutdown: ${key}`);
-		try {
-			session.session.close();
-		} catch (e) {
-			// Ignore close errors
-		}
-	}
-	activeSessions.clear();
-	sessionLocks.clear();
+  // Close all active sessions
+  for (const [key, session] of activeSessions.entries()) {
+    logger.info(`[anthropic] Closing V2 session on shutdown: ${key}`);
+    try {
+      session.session.close();
+    } catch (_e) {
+      // Ignore close errors
+    }
+  }
+  activeSessions.clear();
+  sessionLocks.clear();
 }
 
 // Helper to acquire session lock (prevents race conditions)
-async function withSessionLock<T>(
-	sessionKey: string,
-	fn: () => Promise<T>,
-): Promise<T> {
-	// Wait for any existing operation on this session to complete
-	const existingLock = sessionLocks.get(sessionKey);
-	if (existingLock) {
-		await existingLock;
-	}
+async function withSessionLock<T>(sessionKey: string, fn: () => Promise<T>): Promise<T> {
+  // Wait for any existing operation on this session to complete
+  const existingLock = sessionLocks.get(sessionKey);
+  if (existingLock) {
+    await existingLock;
+  }
 
-	// Create a new lock for this operation
-	let resolve: () => void;
-	const lockPromise = new Promise<void>((r) => {
-		resolve = r;
-	});
-	sessionLocks.set(sessionKey, lockPromise);
+  // Create a new lock for this operation
+  let resolve: () => void;
+  const lockPromise = new Promise<void>((r) => {
+    resolve = r;
+  });
+  sessionLocks.set(sessionKey, lockPromise);
 
-	try {
-		return await fn();
-	} finally {
-		resolve!();
-		// Only delete if this is still our lock
-		if (sessionLocks.get(sessionKey) === lockPromise) {
-			sessionLocks.delete(sessionKey);
-		}
-	}
+  try {
+    return await fn();
+  } finally {
+    resolve!();
+    // Only delete if this is still our lock
+    if (sessionLocks.get(sessionKey) === lockPromise) {
+      sessionLocks.delete(sessionKey);
+    }
+  }
 }
 
 // Start the cleanup interval
 startCleanupInterval();
 
 class AnthropicClient implements ModelClient {
-	private authType: string;
-	private envOverrides: Record<string, string | undefined> = {};
+  private authType: string;
+  private envOverrides: Record<string, string | undefined> = {};
 
-	constructor(
-		private credential: string,
-		private options?: Record<string, unknown>,
-	) {
-		// Hosted mode: platform injects baseUrl + tenantToken to route through gateway
-		const baseUrl = options?.baseUrl as string | undefined;
-		const tenantToken = options?.tenantToken as string | undefined;
+  constructor(
+    credential: string,
+    private options?: Record<string, unknown>,
+  ) {
+    // Hosted mode: platform injects baseUrl + tenantToken to route through gateway
+    const baseUrl = options?.baseUrl as string | undefined;
+    const tenantToken = options?.tenantToken as string | undefined;
 
-		if (baseUrl && tenantToken) {
-			// Validate baseUrl is a proper HTTPS URL before trusting it
-			let parsed: URL;
-			try {
-				parsed = new URL(baseUrl);
-			} catch {
-				throw new Error(`[anthropic] Invalid hosted mode baseUrl: ${baseUrl}`);
-			}
-			if (parsed.protocol !== "https:") {
-				throw new Error(
-					`[anthropic] Hosted mode baseUrl must use HTTPS, got: ${parsed.protocol}`,
-				);
-			}
+    if (baseUrl && tenantToken) {
+      // Validate baseUrl is a proper HTTPS URL before trusting it
+      let parsed: URL;
+      try {
+        parsed = new URL(baseUrl);
+      } catch {
+        throw new Error(`[anthropic] Invalid hosted mode baseUrl: ${baseUrl}`);
+      }
+      if (parsed.protocol !== "https:") {
+        throw new Error(`[anthropic] Hosted mode baseUrl must use HTTPS, got: ${parsed.protocol}`);
+      }
 
-			this.authType = "hosted";
-			this.envOverrides.ANTHROPIC_BASE_URL = baseUrl;
-			this.envOverrides.ANTHROPIC_API_KEY = tenantToken;
-			logger.info(`[anthropic] Using hosted mode: gateway at ${baseUrl}`);
-		} else if (credential && credential.startsWith("sk-ant-")) {
-			this.authType = "api_key";
-			this.envOverrides.ANTHROPIC_BASE_URL = undefined;
-			this.envOverrides.ANTHROPIC_API_KEY = credential;
-		} else {
-			this.envOverrides.ANTHROPIC_BASE_URL = undefined;
-			const auth = getAuth();
-			if (auth?.type === "oauth" && auth.accessToken) {
-				this.authType = "oauth";
-				this.envOverrides.ANTHROPIC_API_KEY = undefined;
-			} else if (auth?.type === "api_key" && auth.apiKey) {
-				this.authType = "api_key";
-				this.envOverrides.ANTHROPIC_API_KEY = auth.apiKey;
-			} else {
-				this.authType = "oauth";
-				this.envOverrides.ANTHROPIC_API_KEY = undefined;
-			}
-		}
-		logger.info(`[anthropic] Using auth: ${this.authType}`);
-	}
+      this.authType = "hosted";
+      this.envOverrides.ANTHROPIC_BASE_URL = baseUrl;
+      this.envOverrides.ANTHROPIC_API_KEY = tenantToken;
+      logger.info(`[anthropic] Using hosted mode: gateway at ${baseUrl}`);
+    } else if (credential?.startsWith("sk-ant-")) {
+      this.authType = "api_key";
+      this.envOverrides.ANTHROPIC_BASE_URL = undefined;
+      this.envOverrides.ANTHROPIC_API_KEY = credential;
+    } else {
+      this.envOverrides.ANTHROPIC_BASE_URL = undefined;
+      const auth = getAuth();
+      if (auth?.type === "oauth" && auth.accessToken) {
+        this.authType = "oauth";
+        this.envOverrides.ANTHROPIC_API_KEY = undefined;
+      } else if (auth?.type === "api_key" && auth.apiKey) {
+        this.authType = "api_key";
+        this.envOverrides.ANTHROPIC_API_KEY = auth.apiKey;
+      } else {
+        this.authType = "oauth";
+        this.envOverrides.ANTHROPIC_API_KEY = undefined;
+      }
+    }
+    logger.info(`[anthropic] Using auth: ${this.authType}`);
+  }
 
-	/** Build env object with instance-specific overrides (avoids mutating process.env) */
-	private buildEnv(): Record<string, string | undefined> {
-		return { ...process.env, ...this.envOverrides };
-	}
+  /** Build env object with instance-specific overrides (avoids mutating process.env) */
+  private buildEnv(): Record<string, string | undefined> {
+    return { ...process.env, ...this.envOverrides };
+  }
 
-	// Check if there's an active V2 session for a given sessionKey
-	hasActiveSession(sessionKey: string): boolean {
-		const active = activeSessions.get(sessionKey);
-		return !!active && active.streaming;
-	}
+  // Check if there's an active V2 session for a given sessionKey
+  hasActiveSession(sessionKey: string): boolean {
+    const active = activeSessions.get(sessionKey);
+    return !!active && active.streaming;
+  }
 
-	// Send a message to an active V2 session (inject into running conversation)
-	async sendToActiveSession(
-		sessionKey: string,
-		message: string,
-	): Promise<void> {
-		const active = activeSessions.get(sessionKey);
-		if (!active) {
-			throw new Error(`No active session for key: ${sessionKey}`);
-		}
+  // Send a message to an active V2 session (inject into running conversation)
+  async sendToActiveSession(sessionKey: string, message: string): Promise<void> {
+    const active = activeSessions.get(sessionKey);
+    if (!active) {
+      throw new Error(`No active session for key: ${sessionKey}`);
+    }
 
-		logger.info(
-			`[anthropic] Injecting message into active session: ${sessionKey}`,
-		);
-		active.lastMessageAt = Date.now();
-		await active.session.send(message);
-	}
+    logger.info(`[anthropic] Injecting message into active session: ${sessionKey}`);
+    active.lastMessageAt = Date.now();
+    await active.session.send(message);
+  }
 
-	// Get the stream generator for an active session (to read new responses)
-	getActiveSessionStream(sessionKey: string): AsyncGenerator<unknown> | null {
-		const active = activeSessions.get(sessionKey);
-		if (!active || !active.streamGenerator) {
-			return null;
-		}
-		return active.streamGenerator as AsyncGenerator<unknown>;
-	}
+  // Get the stream generator for an active session (to read new responses)
+  getActiveSessionStream(sessionKey: string): AsyncGenerator<unknown> | null {
+    const active = activeSessions.get(sessionKey);
+    if (!active || !active.streamGenerator) {
+      return null;
+    }
+    return active.streamGenerator as AsyncGenerator<unknown>;
+  }
 
-	// Close an active session
-	closeSession(sessionKey: string): void {
-		const active = activeSessions.get(sessionKey);
-		if (active) {
-			logger.info(`[anthropic] Closing session: ${sessionKey}`);
-			try {
-				active.session.close();
-			} catch (e) {
-				// Ignore close errors
-			}
-			activeSessions.delete(sessionKey);
-		}
-	}
+  // Close an active session
+  closeSession(sessionKey: string): void {
+    const active = activeSessions.get(sessionKey);
+    if (active) {
+      logger.info(`[anthropic] Closing session: ${sessionKey}`);
+      try {
+        active.session.close();
+      } catch (_e) {
+        // Ignore close errors
+      }
+      activeSessions.delete(sessionKey);
+    }
+  }
 
-	// V2 Session-based query - keeps session alive for message injection
-	async *queryV2(
-		opts: ModelQueryOptions & { sessionKey: string },
-	): AsyncGenerator<unknown> {
-		const model = opts.model || anthropicProvider.defaultModel;
-		const sessionKey = opts.sessionKey;
+  // V2 Session-based query - keeps session alive for message injection
+  async *queryV2(opts: ModelQueryOptions & { sessionKey: string }): AsyncGenerator<unknown> {
+    const model = opts.model || anthropicProvider.defaultModel;
+    const sessionKey = opts.sessionKey;
 
-		// Check if we have an existing session
-		let active = activeSessions.get(sessionKey);
+    // Check if we have an existing session
+    let active = activeSessions.get(sessionKey);
 
-		// If no session exists, create one with lock to prevent race condition
-		// (two concurrent calls both seeing no session and both creating)
-		if (!active) {
-			active = await withSessionLock(sessionKey, async () => {
-				// Double-check after acquiring lock - another call might have created it
-				const existingSession = activeSessions.get(sessionKey);
-				if (existingSession) {
-					logger.info(
-						`[anthropic] Session already created by concurrent call: ${sessionKey}`,
-					);
-					return existingSession;
-				}
+    // If no session exists, create one with lock to prevent race condition
+    // (two concurrent calls both seeing no session and both creating)
+    if (!active) {
+      active = await withSessionLock(sessionKey, async () => {
+        // Double-check after acquiring lock - another call might have created it
+        const existingSession = activeSessions.get(sessionKey);
+        if (existingSession) {
+          logger.info(`[anthropic] Session already created by concurrent call: ${sessionKey}`);
+          return existingSession;
+        }
 
-				// Create or resume V2 session
-				// allowedTools can be overridden via providerOptions.allowedTools
-				const allowedTools =
-					(opts.providerOptions?.allowedTools as string[]) ||
-					DEFAULT_ALLOWED_TOOLS;
-				const sessionOptions: any = {
-					model,
-					allowedTools,
-					env: this.buildEnv(),
-				};
+        // Create or resume V2 session
+        // allowedTools can be overridden via providerOptions.allowedTools
+        const allowedTools = (opts.providerOptions?.allowedTools as string[]) || DEFAULT_ALLOWED_TOOLS;
+        const sessionOptions: any = {
+          model,
+          allowedTools,
+          env: this.buildEnv(),
+        };
 
-				// Pass through options from the query
-				if (opts.systemPrompt) sessionOptions.systemPrompt = opts.systemPrompt;
-				if (opts.temperature !== undefined)
-					sessionOptions.temperature = opts.temperature;
-				if (opts.topP !== undefined) sessionOptions.topP = opts.topP;
-				if (opts.maxTokens) sessionOptions.max_tokens = opts.maxTokens;
-				if (opts.mcpServers) sessionOptions.mcpServers = opts.mcpServers;
-				if (opts.thinking) sessionOptions.thinking = opts.thinking;
-				if (opts.effort) sessionOptions.effort = opts.effort;
-				if (opts.betas) sessionOptions.betas = opts.betas;
-				if (opts.responseFormat) {
-					sessionOptions.outputFormat = opts.responseFormat;
-				}
-				if (opts.providerOptions) {
-					// Copy providerOptions but don't overwrite allowedTools or env (already handled above)
-					const {
-						allowedTools: _,
-						env: _env,
-						...restOptions
-					} = opts.providerOptions;
-					Object.assign(sessionOptions, restOptions);
-				}
+        // Pass through options from the query
+        if (opts.systemPrompt) sessionOptions.systemPrompt = opts.systemPrompt;
+        if (opts.temperature !== undefined) sessionOptions.temperature = opts.temperature;
+        if (opts.topP !== undefined) sessionOptions.topP = opts.topP;
+        if (opts.maxTokens) sessionOptions.max_tokens = opts.maxTokens;
+        if (opts.mcpServers) sessionOptions.mcpServers = opts.mcpServers;
+        if (opts.thinking) sessionOptions.thinking = opts.thinking;
+        if (opts.effort) sessionOptions.effort = opts.effort;
+        if (opts.betas) sessionOptions.betas = opts.betas;
+        if (opts.responseFormat) {
+          sessionOptions.outputFormat = opts.responseFormat;
+        }
+        if (opts.providerOptions) {
+          // Copy providerOptions but don't overwrite allowedTools or env (already handled above)
+          const { allowedTools: _, env: _env, ...restOptions } = opts.providerOptions;
+          Object.assign(sessionOptions, restOptions);
+        }
 
-				let session: SDKSession;
+        let session: SDKSession;
 
-				if (opts.resume) {
-					logger.info(`[anthropic] Resuming V2 session by ID: ${opts.resume}`);
-					session = unstable_v2_resumeSession(opts.resume, sessionOptions);
-				} else {
-					logger.info(`[anthropic] Creating new V2 session for: ${sessionKey}`);
-					session = unstable_v2_createSession(sessionOptions);
-				}
+        if (opts.resume) {
+          logger.info(`[anthropic] Resuming V2 session by ID: ${opts.resume}`);
+          session = unstable_v2_resumeSession(opts.resume, sessionOptions);
+        } else {
+          logger.info(`[anthropic] Creating new V2 session for: ${sessionKey}`);
+          session = unstable_v2_createSession(sessionOptions);
+        }
 
-				// Track this session
-				const newSession: ActiveSession = {
-					session,
-					sessionId: opts.resume || null,
-					model,
-					createdAt: Date.now(),
-					lastMessageAt: Date.now(),
-					streaming: false, // Will be set true when we start streaming
-					streamGenerator: null,
-				};
-				activeSessions.set(sessionKey, newSession);
+        // Track this session
+        const newSession: ActiveSession = {
+          session,
+          sessionId: opts.resume || null,
+          model,
+          createdAt: Date.now(),
+          lastMessageAt: Date.now(),
+          streaming: false, // Will be set true when we start streaming
+          streamGenerator: null,
+        };
+        activeSessions.set(sessionKey, newSession);
 
-				return newSession;
-			});
-		} else {
-			logger.info(
-				`[anthropic] Reusing existing V2 session for: ${sessionKey} (was streaming: ${active.streaming})`,
-			);
-		}
+        return newSession;
+      });
+    } else {
+      logger.info(`[anthropic] Reusing existing V2 session for: ${sessionKey} (was streaming: ${active.streaming})`);
+    }
 
-		// Now we have a session (either existing or newly created)
-		// The lock is released - streaming happens without holding the lock
-		// This allows sendToActiveSession() to inject messages during streaming
-		active.lastMessageAt = Date.now();
-		active.streaming = true;
+    // Now we have a session (either existing or newly created)
+    // The lock is released - streaming happens without holding the lock
+    // This allows sendToActiveSession() to inject messages during streaming
+    active.lastMessageAt = Date.now();
+    active.streaming = true;
 
-		try {
-			// Send the message
-			await active.session.send(opts.prompt);
+    try {
+      // Send the message
+      await retryWithBackoff(() => active.session.send(opts.prompt), { maxRetries: 3, baseDelayMs: 1000 }, logger);
 
-			// Stream and yield responses
-			const stream = active.session.stream();
-			active.streamGenerator = stream;
+      // Stream and yield responses
+      const stream = active.session.stream();
+      active.streamGenerator = stream;
 
-			for await (const msg of stream) {
-				// Capture session ID (available on every message per V2 API docs)
-				const msgWithId = msg as SDKMessageWithSessionId;
-				if (msgWithId.session_id && !active.sessionId) {
-					active.sessionId = msgWithId.session_id;
-					logger.info(
-						`[anthropic] V2 Session initialized: ${active.sessionId}`,
-					);
-				}
-				yield msg;
-			}
+      for await (const msg of stream) {
+        // Capture session ID (available on every message per V2 API docs)
+        const msgWithId = msg as SDKMessageWithSessionId;
+        if (msgWithId.session_id && !active.sessionId) {
+          active.sessionId = msgWithId.session_id;
+          logger.info(`[anthropic] V2 Session initialized: ${active.sessionId}`);
+        }
+        yield msg;
+      }
 
-			// Stream completed
-			active.streaming = false;
-			active.streamGenerator = null;
-		} catch (error) {
-			active.streaming = false;
-			active.streamGenerator = null;
+      // Stream completed
+      active.streaming = false;
+      active.streamGenerator = null;
+    } catch (error) {
+      active.streaming = false;
+      active.streamGenerator = null;
 
-			// If session is stale/dead, remove it
-			const errorStr = String(error);
-			if (
-				errorStr.includes("session") ||
-				errorStr.includes("closed") ||
-				errorStr.includes("No conversation")
-			) {
-				logger.warn(`[anthropic] V2 Session stale, removing: ${sessionKey}`);
-				activeSessions.delete(sessionKey);
-			} else {
-				activeSessions.delete(sessionKey); // Clean up on failure
-				logger.error("[anthropic] V2 Query failed:", error);
-				throw new Error(
-					`Anthropic V2 query failed: ${error instanceof Error ? error.message : String(error)}`,
-				);
-			}
-		}
-	}
+      // If session is stale/dead, remove it
+      const errorStr = String(error);
+      if (errorStr.includes("session") || errorStr.includes("closed") || errorStr.includes("No conversation")) {
+        logger.warn(`[anthropic] V2 Session stale, removing: ${sessionKey}`);
+        activeSessions.delete(sessionKey);
+      } else {
+        activeSessions.delete(sessionKey); // Clean up on failure
+        logger.error("[anthropic] V2 Query failed:", error);
+        throw new Error(`Anthropic V2 query failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  }
 
-	// Original V1 query method (backward compatible)
-	async *query(opts: ModelQueryOptions): AsyncGenerator<unknown> {
-		const model = opts.model || anthropicProvider.defaultModel;
+  // Original V1 query method (backward compatible)
+  async *query(opts: ModelQueryOptions): AsyncGenerator<unknown> {
+    const model = opts.model || anthropicProvider.defaultModel;
 
-		const queryOptions: any = {
-			max_tokens: opts.maxTokens || 4096,
-			model,
-			permissionMode: "bypassPermissions",
-			allowDangerouslySkipPermissions: true,
-			env: this.buildEnv(),
-		};
+    const queryOptions: any = {
+      max_tokens: opts.maxTokens || 4096,
+      model,
+      permissionMode: "bypassPermissions",
+      allowDangerouslySkipPermissions: true,
+      env: this.buildEnv(),
+    };
 
-		if (opts.systemPrompt) queryOptions.systemPrompt = opts.systemPrompt;
-		if (opts.resume) {
-			queryOptions.resume = opts.resume;
-			logger.info(`[anthropic] Resuming session: ${opts.resume}`);
-		}
-		if (opts.temperature !== undefined)
-			queryOptions.temperature = opts.temperature;
-		if (opts.topP !== undefined) queryOptions.topP = opts.topP;
-		if (opts.mcpServers) queryOptions.mcpServers = opts.mcpServers;
-		if (opts.thinking) queryOptions.thinking = opts.thinking;
-		if (opts.effort) queryOptions.effort = opts.effort;
-		if (opts.betas) queryOptions.betas = opts.betas;
-		if (opts.responseFormat) {
-			queryOptions.outputFormat = opts.responseFormat;
-		}
+    if (opts.systemPrompt) queryOptions.systemPrompt = opts.systemPrompt;
+    if (opts.resume) {
+      queryOptions.resume = opts.resume;
+      logger.info(`[anthropic] Resuming session: ${opts.resume}`);
+    }
+    if (opts.temperature !== undefined) queryOptions.temperature = opts.temperature;
+    if (opts.topP !== undefined) queryOptions.topP = opts.topP;
+    if (opts.mcpServers) queryOptions.mcpServers = opts.mcpServers;
+    if (opts.thinking) queryOptions.thinking = opts.thinking;
+    if (opts.effort) queryOptions.effort = opts.effort;
+    if (opts.betas) queryOptions.betas = opts.betas;
+    if (opts.responseFormat) {
+      queryOptions.outputFormat = opts.responseFormat;
+    }
 
-		let prompt = opts.prompt;
-		if (opts.images && opts.images.length > 0) {
-			const imageContents = [];
-			for (const imageUrl of opts.images) {
-				const imageData = await downloadImageAsBase64(imageUrl);
-				if (imageData) {
-					imageContents.push({
-						type: "image",
-						source: {
-							type: "base64",
-							media_type: imageData.mediaType,
-							data: imageData.data,
-						},
-					});
-				}
-			}
-			if (imageContents.length > 0) {
-				queryOptions.imageContents = imageContents;
-				prompt = `[User has shared ${imageContents.length} image(s)]\n\n${prompt}`;
-			}
-		}
+    let prompt = opts.prompt;
+    if (opts.images && opts.images.length > 0) {
+      const imageContents = [];
+      for (const imageUrl of opts.images) {
+        const imageData = await downloadImageAsBase64(imageUrl);
+        if (imageData) {
+          imageContents.push({
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: imageData.mediaType,
+              data: imageData.data,
+            },
+          });
+        }
+      }
+      if (imageContents.length > 0) {
+        queryOptions.imageContents = imageContents;
+        prompt = `[User has shared ${imageContents.length} image(s)]\n\n${prompt}`;
+      }
+    }
 
-		if (opts.providerOptions) Object.assign(queryOptions, opts.providerOptions);
-		if (this.options) Object.assign(queryOptions, this.options);
+    if (opts.providerOptions) Object.assign(queryOptions, opts.providerOptions);
+    if (this.options) Object.assign(queryOptions, this.options);
 
-		try {
-			const q = query({ prompt, options: queryOptions });
-			let sessionLogged = false;
+    const maxRetries = 3;
+    const baseDelayMs = 1000;
+    const retryableCodes = [429, 503];
 
-			for await (const msg of q) {
-				// Log session ID once for debugging
-				const msgWithId = msg as SDKMessageWithSessionId;
-				if (msgWithId.session_id && !sessionLogged) {
-					logger.info(
-						`[anthropic] Session initialized: ${msgWithId.session_id}`,
-					);
-					sessionLogged = true;
-				}
-				// Pass through all messages unchanged
-				yield msg;
-			}
-		} catch (error) {
-			logger.error("[anthropic] Query failed:", error);
-			throw new Error(
-				`Anthropic query failed: ${error instanceof Error ? error.message : String(error)}`,
-			);
-		}
-	}
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const q = query({ prompt, options: queryOptions });
+        let sessionLogged = false;
+        for await (const msg of q) {
+          const msgWithId = msg as SDKMessageWithSessionId;
+          if (msgWithId.session_id && !sessionLogged) {
+            logger.info(`[anthropic] Session initialized: ${msgWithId.session_id}`);
+            sessionLogged = true;
+          }
+          yield msg;
+        }
+        return; // Success — done iterating
+      } catch (error: unknown) {
+        lastError = error;
+        if (attempt === maxRetries) break;
 
-	async listModels(): Promise<string[]> {
-		// Trigger async discovery (updates supportedModels as side effect)
-		try {
-			const models = await discoverModels();
-			return models.map((m) => m.id);
-		} catch {
-			return anthropicProvider.supportedModels;
-		}
-	}
+        const msg = error instanceof Error ? error.message : String(error);
+        const status = (error as any)?.status ?? (error as any)?.statusCode;
+        const isRetryable =
+          (status && retryableCodes.includes(status)) ||
+          msg.includes("ECONNRESET") ||
+          msg.includes("ECONNREFUSED") ||
+          msg.includes("ETIMEDOUT") ||
+          msg.includes("fetch failed") ||
+          msg.includes("network") ||
+          msg.includes("socket hang up");
 
-	async healthCheck(): Promise<boolean> {
-		try {
-			const q = query({
-				prompt: "test",
-				options: {
-					max_tokens: 10,
-					permissionMode: "bypassPermissions",
-					allowDangerouslySkipPermissions: true,
-					env: this.buildEnv(),
-				} as any,
-			});
-			for await (const _ of q) {
-			}
-			return true;
-		} catch (error) {
-			logger.error("[anthropic] Health check failed:", error);
-			return false;
-		}
-	}
+        if (!isRetryable) break;
+
+        const delay = baseDelayMs * 2 ** attempt;
+        logger.warn(
+          `[retry] Attempt ${attempt + 1}/${maxRetries} failed (${status || msg.slice(0, 80)}), retrying in ${delay}ms`,
+        );
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    }
+
+    logger.error("[anthropic] Query failed:", lastError);
+    throw new Error(`Anthropic query failed: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
+  }
+
+  async listModels(): Promise<string[]> {
+    // Trigger async discovery (updates supportedModels as side effect)
+    try {
+      const models = await discoverModels();
+      return models.map((m) => m.id);
+    } catch {
+      return anthropicProvider.supportedModels;
+    }
+  }
+
+  async healthCheck(): Promise<boolean> {
+    try {
+      await retryWithBackoff(
+        async () => {
+          const q = query({
+            prompt: "test",
+            options: {
+              max_tokens: 10,
+              permissionMode: "bypassPermissions",
+              allowDangerouslySkipPermissions: true,
+              env: this.buildEnv(),
+            } as any,
+          });
+          for await (const _ of q) {
+          }
+        },
+        { maxRetries: 3, baseDelayMs: 1000 },
+        logger,
+      );
+      return true;
+    } catch (error) {
+      logger.error("[anthropic] Health check failed:", error);
+      return false;
+    }
+  }
 }
 
 // Export client class and model discovery for type checking
@@ -1020,67 +1091,65 @@ export type { DiscoveredModel, ResponseFormat };
 // =============================================================================
 
 const manifest: PluginManifest = {
-	name: "@wopr-network/wopr-plugin-provider-anthropic",
-	version: "2.3.0",
-	description:
-		"Anthropic Claude with OAuth, API Key, Bedrock, Vertex, Foundry support + dynamic model discovery + structured outputs",
-	author: "WOPR Network",
-	license: "MIT",
-	repository: "https://github.com/wopr-network/wopr-plugin-provider-anthropic",
-	capabilities: ["provider"],
-	category: "ai-provider",
-	icon: "🤖",
-	tags: ["anthropic", "claude", "ai", "provider", "oauth", "bedrock", "vertex"],
-	requires: {
-		network: {
-			outbound: true,
-			hosts: ["api.anthropic.com", "docs.anthropic.com"],
-		},
-	},
-	configSchema: {
-		title: "Anthropic Claude",
-		description: "Configure Anthropic Claude authentication",
-		fields: [
-			{
-				name: "authMethod",
-				type: "select",
-				label: "Authentication Method",
-				description: "Choose how to authenticate with Claude",
-				setupFlow: "paste",
-			},
-			{
-				name: "apiKey",
-				type: "password",
-				label: "API Key",
-				placeholder: "sk-ant-...",
-				required: false,
-				description: "Only needed for API Key auth method",
-				secret: true,
-				setupFlow: "paste",
-			},
-			{
-				name: "baseUrl",
-				type: "text",
-				label: "Gateway Base URL",
-				required: false,
-				description:
-					"WOPR gateway URL (injected by platform for hosted tenants)",
-			},
-			{
-				name: "tenantToken",
-				type: "password",
-				label: "Tenant Token",
-				required: false,
-				description:
-					"WOPR tenant auth token (injected by platform for hosted tenants)",
-				secret: true,
-			},
-		],
-	},
-	lifecycle: {
-		shutdownBehavior: "graceful",
-		shutdownTimeoutMs: 10000,
-	},
+  name: "@wopr-network/wopr-plugin-provider-anthropic",
+  version: "2.3.0",
+  description:
+    "Anthropic Claude with OAuth, API Key, Bedrock, Vertex, Foundry support + dynamic model discovery + structured outputs",
+  author: "WOPR Network",
+  license: "MIT",
+  repository: "https://github.com/wopr-network/wopr-plugin-provider-anthropic",
+  capabilities: ["provider"],
+  category: "ai-provider",
+  icon: "🤖",
+  tags: ["anthropic", "claude", "ai", "provider", "oauth", "bedrock", "vertex"],
+  requires: {
+    network: {
+      outbound: true,
+      hosts: ["api.anthropic.com", "docs.anthropic.com"],
+    },
+  },
+  configSchema: {
+    title: "Anthropic Claude",
+    description: "Configure Anthropic Claude authentication",
+    fields: [
+      {
+        name: "authMethod",
+        type: "select",
+        label: "Authentication Method",
+        description: "Choose how to authenticate with Claude",
+        setupFlow: "paste",
+      },
+      {
+        name: "apiKey",
+        type: "password",
+        label: "API Key",
+        placeholder: "sk-ant-...",
+        required: false,
+        description: "Only needed for API Key auth method",
+        secret: true,
+        setupFlow: "paste",
+      },
+      {
+        name: "baseUrl",
+        type: "text",
+        label: "Gateway Base URL",
+        required: false,
+        description: "WOPR gateway URL (injected by platform for hosted tenants)",
+      },
+      {
+        name: "tenantToken",
+        type: "password",
+        label: "Tenant Token",
+        required: false,
+        description: "WOPR tenant auth token (injected by platform for hosted tenants)",
+        secret: true,
+      },
+    ],
+  },
+  lifecycle: {
+    shutdownBehavior: "graceful",
+    shutdownTimeoutMs: 10000,
+  },
 };
 
 // =============================================================================
@@ -1088,116 +1157,112 @@ const manifest: PluginManifest = {
 // =============================================================================
 
 const plugin: WOPRPlugin = {
-	name: "provider-anthropic",
-	version: "2.3.0",
-	description:
-		"Anthropic Claude with OAuth, API Key, Bedrock, Vertex, Foundry support + dynamic model discovery + structured outputs",
-	manifest,
+  name: "provider-anthropic",
+  version: "2.3.0",
+  description:
+    "Anthropic Claude with OAuth, API Key, Bedrock, Vertex, Foundry support + dynamic model discovery + structured outputs",
+  manifest,
 
-	async init(ctx: WOPRPluginContext) {
-		ctx.log.info("Registering Anthropic provider...");
+  async init(ctx: WOPRPluginContext) {
+    ctx.log.info("Registering Anthropic provider...");
 
-		const activeAuth = getActiveAuthMethod();
-		const authMethods = getAuthMethods();
-		const activeMethod = authMethods.find((m) => m.id === activeAuth);
+    const activeAuth = getActiveAuthMethod();
+    const authMethods = getAuthMethods();
+    const activeMethod = authMethods.find((m) => m.id === activeAuth);
 
-		if (activeMethod?.available) {
-			ctx.log.info(`  Auth: ${activeMethod.name}`);
-		} else {
-			ctx.log.warn("  Auth: None configured");
-			const available = authMethods.filter((m) => m.available);
-			if (available.length > 0) {
-				ctx.log.info(`  Available: ${available.map((m) => m.name).join(", ")}`);
-			}
-		}
+    if (activeMethod?.available) {
+      ctx.log.info(`  Auth: ${activeMethod.name}`);
+    } else {
+      ctx.log.warn("  Auth: None configured");
+      const available = authMethods.filter((m) => m.available);
+      if (available.length > 0) {
+        ctx.log.info(`  Available: ${available.map((m) => m.name).join(", ")}`);
+      }
+    }
 
-		ctx.registerLLMProvider(anthropicProvider);
-		ctx.log.info("Anthropic provider registered");
+    ctx.registerLLMProvider(anthropicProvider);
+    ctx.log.info("Anthropic provider registered");
 
-		// Register extension for daemon model endpoint enrichment (WOP-268)
-		if (ctx.registerExtension) {
-			ctx.registerExtension("provider-anthropic", {
-				getModelInfo: async () => {
-					const models = await getModelInfo();
-					// Strip any credential-adjacent data — only return display info
-					return models.map((m) => ({
-						id: m.id,
-						name: m.name,
-						contextWindow: m.contextWindow,
-						maxOutput: m.maxOutput,
-						inputPrice: m.inputPrice,
-						outputPrice: m.outputPrice,
-						legacy: m.legacy,
-					}));
-				},
-			});
-			ctx.log.info("Registered provider-anthropic extension");
-		}
+    // Register extension for daemon model endpoint enrichment (WOP-268)
+    if (ctx.registerExtension) {
+      ctx.registerExtension("provider-anthropic", {
+        getModelInfo: async () => {
+          const models = await getModelInfo();
+          // Strip any credential-adjacent data — only return display info
+          return models.map((m) => ({
+            id: m.id,
+            name: m.name,
+            contextWindow: m.contextWindow,
+            maxOutput: m.maxOutput,
+            inputPrice: m.inputPrice,
+            outputPrice: m.outputPrice,
+            legacy: m.legacy,
+          }));
+        },
+      });
+      ctx.log.info("Registered provider-anthropic extension");
+    }
 
-		// Kick off model discovery in background (non-blocking)
-		if (activeMethod?.available) {
-			discoverModels()
-				.then((models) => {
-					const current = models.filter((m) => !m.legacy);
-					ctx.log.info(
-						`  Models: ${current.map((m) => m.name).join(", ")} (${models.length} total)`,
-					);
-				})
-				.catch((err) => {
-					ctx.log.warn(`  Model discovery deferred: ${err.message || err}`);
-				});
-		}
+    // Kick off model discovery in background (non-blocking)
+    if (activeMethod?.available) {
+      discoverModels()
+        .then((models) => {
+          const current = models.filter((m) => !m.legacy);
+          ctx.log.info(`  Models: ${current.map((m) => m.name).join(", ")} (${models.length} total)`);
+        })
+        .catch((err) => {
+          ctx.log.warn(`  Model discovery deferred: ${err.message || err}`);
+        });
+    }
 
-		// Config schema uses data from provider
-		const methods = getAuthMethods();
-		ctx.registerConfigSchema("provider-anthropic", {
-			title: "Anthropic Claude",
-			description: "Configure Anthropic Claude authentication",
-			fields: [
-				{
-					name: "authMethod",
-					type: "select",
-					label: "Authentication Method",
-					options: methods.map((m) => ({
-						value: m.id,
-						label: `${m.name}${m.available ? " ✓" : ""}`,
-					})),
-					default: getActiveAuthMethod(),
-					description: "Choose how to authenticate with Claude",
-				},
-				{
-					name: "apiKey",
-					type: "password",
-					label: "API Key",
-					placeholder: "sk-ant-...",
-					required: false,
-					description: "Only needed for API Key auth method",
-				},
-				{
-					name: "baseUrl",
-					type: "text",
-					label: "Gateway Base URL",
-					required: false,
-					description:
-						"WOPR gateway URL (injected by platform for hosted tenants)",
-				},
-				{
-					name: "tenantToken",
-					type: "password",
-					label: "Tenant Token",
-					required: false,
-					description:
-						"WOPR tenant auth token (injected by platform for hosted tenants)",
-					secret: true,
-				},
-			],
-		});
-	},
+    // Config schema uses data from provider
+    const methods = getAuthMethods();
+    ctx.registerConfigSchema("provider-anthropic", {
+      title: "Anthropic Claude",
+      description: "Configure Anthropic Claude authentication",
+      fields: [
+        {
+          name: "authMethod",
+          type: "select",
+          label: "Authentication Method",
+          options: methods.map((m) => ({
+            value: m.id,
+            label: `${m.name}${m.available ? " ✓" : ""}`,
+          })),
+          default: getActiveAuthMethod(),
+          description: "Choose how to authenticate with Claude",
+        },
+        {
+          name: "apiKey",
+          type: "password",
+          label: "API Key",
+          placeholder: "sk-ant-...",
+          required: false,
+          description: "Only needed for API Key auth method",
+        },
+        {
+          name: "baseUrl",
+          type: "text",
+          label: "Gateway Base URL",
+          required: false,
+          description: "WOPR gateway URL (injected by platform for hosted tenants)",
+        },
+        {
+          name: "tenantToken",
+          type: "password",
+          label: "Tenant Token",
+          required: false,
+          description: "WOPR tenant auth token (injected by platform for hosted tenants)",
+          secret: true,
+        },
+      ],
+    });
+  },
 
-	async shutdown() {
-		logger.info("[provider-anthropic] Shutting down");
-		stopCleanupAndCloseSessions();
-	},
+  async shutdown() {
+    logger.info("[provider-anthropic] Shutting down");
+    stopCleanupAndCloseSessions();
+  },
 };
 
 export default plugin;
