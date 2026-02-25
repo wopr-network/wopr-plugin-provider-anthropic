@@ -345,25 +345,86 @@ interface ModelCacheEntry {
 let modelCache: ModelCacheEntry | null = null;
 
 function stripHtml(html: string): string {
-  // Remove script and style blocks iteratively to prevent incomplete sanitization
-  // from interleaved tags (e.g. <scr<script>ipt>) after a single-pass removal.
-  let result = html;
-  let prev: string;
-  do {
-    prev = result;
-    result = result.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "");
-    result = result.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "");
-  } while (result !== prev);
-  return result
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/\s+/g, " ")
-    .trim();
+  // Extract plain text from HTML for LLM consumption.
+  // Process character by character to avoid regex-based incomplete sanitization.
+  let result = "";
+  let i = 0;
+  const len = html.length;
+  while (i < len) {
+    if (html[i] === "<") {
+      // Skip entire tag including contents for script/style elements
+      i++; // skip '<'
+      // Check if this is a closing tag
+      const isClose = i < len && html[i] === "/";
+      if (isClose) i++;
+      // Read tag name
+      let tagName = "";
+      while (
+        i < len &&
+        html[i] !== ">" &&
+        html[i] !== " " &&
+        html[i] !== "\t" &&
+        html[i] !== "\n" &&
+        html[i] !== "\r"
+      ) {
+        tagName += html[i].toLowerCase();
+        i++;
+      }
+      // Skip to end of opening tag
+      while (i < len && html[i] !== ">") i++;
+      if (i < len) i++; // skip '>'
+      // For script/style, skip until closing tag
+      if (!isClose && (tagName === "script" || tagName === "style")) {
+        const closeTag = `</${tagName}`;
+        const closeIdx = html.toLowerCase().indexOf(closeTag, i);
+        if (closeIdx !== -1) {
+          i = closeIdx + closeTag.length;
+          // Skip to end of closing tag
+          while (i < len && html[i] !== ">") i++;
+          if (i < len) i++; // skip '>'
+        } else {
+          i = len; // no closing tag found, skip rest
+        }
+      } else {
+        result += " "; // replace tag with space
+      }
+    } else if (html[i] === "&") {
+      // Decode HTML entity
+      const semi = html.indexOf(";", i);
+      if (semi !== -1 && semi - i <= 10) {
+        const entity = html.slice(i + 1, semi);
+        i = semi + 1;
+        switch (entity) {
+          case "nbsp":
+            result += " ";
+            break;
+          case "amp":
+            result += "&";
+            break;
+          case "lt":
+            result += "<";
+            break;
+          case "gt":
+            result += ">";
+            break;
+          case "quot":
+            result += '"';
+            break;
+          case "#39":
+            result += "'";
+            break;
+          default:
+            result += " ";
+            break;
+        }
+      } else {
+        result += html[i++];
+      }
+    } else {
+      result += html[i++];
+    }
+  }
+  return result.replace(/\s+/g, " ").trim();
 }
 
 /**
