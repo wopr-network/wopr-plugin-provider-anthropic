@@ -81,10 +81,19 @@ describe("retryWithBackoff", () => {
 			.mockRejectedValueOnce(error429)
 			.mockRejectedValueOnce(error429)
 			.mockResolvedValue("ok");
-		await retryWithBackoff(fn, { maxRetries: 3, baseDelayMs: 1 }, { warn: warnFn });
+		await retryWithBackoff(fn, { maxRetries: 3, baseDelayMs: 100 }, { warn: warnFn });
 		expect(warnFn).toHaveBeenCalledTimes(2);
-		// Check that delay messages mention increasing delays
-		expect(warnFn.mock.calls[0][0]).toContain("1ms");
-		expect(warnFn.mock.calls[1][0]).toContain("2ms");
+		// Extract delay values from warn messages (jitter means exact values vary, but both should be >= 50ms)
+		const delayMatch0 = warnFn.mock.calls[0][0].match(/retrying in (\d+)ms/);
+		const delayMatch1 = warnFn.mock.calls[1][0].match(/retrying in (\d+)ms/);
+		expect(delayMatch0).not.toBeNull();
+		expect(delayMatch1).not.toBeNull();
+		const delay0 = Number(delayMatch0![1]);
+		const delay1 = Number(delayMatch1![1]);
+		// First retry: jittered delay in range [50, 100], second: [100, 200]
+		expect(delay0).toBeGreaterThanOrEqual(50);
+		expect(delay0).toBeLessThanOrEqual(100);
+		expect(delay1).toBeGreaterThanOrEqual(100);
+		expect(delay1).toBeLessThanOrEqual(200);
 	});
 });

@@ -145,16 +145,17 @@ export async function retryWithBackoff<T>(
         msg.includes("ECONNREFUSED") ||
         msg.includes("ETIMEDOUT") ||
         msg.includes("fetch failed") ||
-        msg.includes("network") ||
+        msg.includes("NetworkError") ||
         msg.includes("socket hang up");
 
       if (!isRetryable) throw error;
 
       const delay = baseDelayMs * 2 ** attempt;
+      const jitteredDelay = Math.floor(delay / 2 + Math.random() * (delay / 2));
       logger.warn(
-        `[retry] Attempt ${attempt + 1}/${maxRetries} failed (${status || msg.slice(0, 80)}), retrying in ${delay}ms`,
+        `[retry] Attempt ${attempt + 1}/${maxRetries} failed (${status || msg.slice(0, 80)}), retrying in ${jitteredDelay}ms`,
       );
-      await new Promise((r) => setTimeout(r, delay));
+      await new Promise((r) => setTimeout(r, jitteredDelay));
     }
   }
   throw new Error("unreachable");
@@ -351,17 +352,17 @@ function stripHtml(html: string): string {
   let prev: string;
   do {
     prev = result;
-    result = result.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "");
-    result = result.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "");
+    result = result.replace(/<script[^>]*>[\s\S]*?<\/script\s*>/gi, "");
+    result = result.replace(/<style[^>]*>[\s\S]*?<\/style\s*>/gi, "");
   } while (result !== prev);
   return result
     .replace(/<[^>]+>/g, " ")
     .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -424,7 +425,7 @@ ${text}`;
     }
 
     // Parse JSON from response
-    const jsonMatch = result.match(/\[[\s\S]*\]/);
+    const jsonMatch = result.match(/\[[\s\S]*?\]/);
     if (!jsonMatch) throw new Error("No JSON array in Haiku response");
 
     const models: DiscoveredModel[] = JSON.parse(jsonMatch[0]);
@@ -644,26 +645,24 @@ function stopCleanupAndCloseSessions() {
 }
 
 // Helper to acquire session lock (prevents race conditions)
+// Uses a promise-chain so each waiter is queued behind the current tail,
+// correctly serializing 3+ concurrent callers on the same sessionKey.
 async function withSessionLock<T>(sessionKey: string, fn: () => Promise<T>): Promise<T> {
-  // Wait for any existing operation on this session to complete
-  const existingLock = sessionLocks.get(sessionKey);
-  if (existingLock) {
-    await existingLock;
-  }
+  const prev = sessionLocks.get(sessionKey) ?? Promise.resolve();
 
-  // Create a new lock for this operation
   let resolve: () => void;
-  const lockPromise = new Promise<void>((r) => {
+  const next = new Promise<void>((r) => {
     resolve = r;
   });
-  sessionLocks.set(sessionKey, lockPromise);
+  sessionLocks.set(sessionKey, next);
+
+  await prev;
 
   try {
     return await fn();
   } finally {
     resolve!();
-    // Only delete if this is still our lock
-    if (sessionLocks.get(sessionKey) === lockPromise) {
+    if (sessionLocks.get(sessionKey) === next) {
       sessionLocks.delete(sessionKey);
     }
   }
@@ -872,11 +871,12 @@ class AnthropicClient implements ModelClient {
       active.streaming = false;
       active.streamGenerator = null;
 
-      // If session is stale/dead, remove it
+      // If session is stale/dead, remove it and re-throw so caller can retry
       const errorStr = String(error);
       if (errorStr.includes("session") || errorStr.includes("closed") || errorStr.includes("No conversation")) {
         logger.warn(`[anthropic] V2 Session stale, removing: ${sessionKey}`);
         activeSessions.delete(sessionKey);
+        throw new Error(`Anthropic V2 session stale: ${error instanceof Error ? error.message : String(error)}`);
       } else {
         activeSessions.delete(sessionKey); // Clean up on failure
         logger.error("[anthropic] V2 Query failed:", error);
@@ -934,8 +934,26 @@ class AnthropicClient implements ModelClient {
       }
     }
 
-    if (opts.providerOptions) Object.assign(queryOptions, opts.providerOptions);
-    if (this.options) Object.assign(queryOptions, this.options);
+    if (opts.providerOptions) {
+      const {
+        env: _e,
+        permissionMode: _p,
+        allowDangerouslySkipPermissions: _s,
+        allowedTools: _a,
+        ...safe
+      } = opts.providerOptions as Record<string, unknown>;
+      Object.assign(queryOptions, safe);
+    }
+    if (this.options) {
+      const {
+        env: _e,
+        permissionMode: _p,
+        allowDangerouslySkipPermissions: _s,
+        allowedTools: _a,
+        ...safe
+      } = this.options as Record<string, unknown>;
+      Object.assign(queryOptions, safe);
+    }
 
     const maxRetries = 3;
     const baseDelayMs = 1000;
@@ -967,16 +985,17 @@ class AnthropicClient implements ModelClient {
           msg.includes("ECONNREFUSED") ||
           msg.includes("ETIMEDOUT") ||
           msg.includes("fetch failed") ||
-          msg.includes("network") ||
+          msg.includes("NetworkError") ||
           msg.includes("socket hang up");
 
         if (!isRetryable) break;
 
         const delay = baseDelayMs * 2 ** attempt;
+        const jitteredDelay = Math.floor(delay / 2 + Math.random() * (delay / 2));
         logger.warn(
-          `[retry] Attempt ${attempt + 1}/${maxRetries} failed (${status || msg.slice(0, 80)}), retrying in ${delay}ms`,
+          `[retry] Attempt ${attempt + 1}/${maxRetries} failed (${status || msg.slice(0, 80)}), retrying in ${jitteredDelay}ms`,
         );
-        await new Promise((r) => setTimeout(r, delay));
+        await new Promise((r) => setTimeout(r, jitteredDelay));
       }
     }
 
