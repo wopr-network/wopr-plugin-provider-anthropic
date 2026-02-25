@@ -6,6 +6,9 @@
  * 2. API Key - Direct API key (sk-ant-...)
  */
 
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import {
   query,
   type SDKMessage,
@@ -13,10 +16,7 @@ import {
   unstable_v2_createSession,
   unstable_v2_resumeSession,
 } from "@anthropic-ai/claude-agent-sdk";
-import type { ConfigSchema, PluginManifest, WOPRPlugin, WOPRPluginContext } from "@wopr-network/plugin-types";
-import { existsSync, readFileSync } from "fs";
-import { homedir } from "os";
-import { join } from "path";
+import type { PluginManifest, WOPRPlugin, WOPRPluginContext } from "@wopr-network/plugin-types";
 import winston from "winston";
 
 // =============================================================================
@@ -479,7 +479,7 @@ ${text}`;
 /**
  * Get discovered models (cached). Non-blocking - returns fallback if not yet fetched.
  */
-function getDiscoveredModelIds(): string[] {
+function _getDiscoveredModelIds(): string[] {
   if (modelCache) return modelCache.models.map((m) => m.id);
   return FALLBACK_MODEL_IDS;
 }
@@ -612,7 +612,7 @@ function startCleanupInterval() {
           logger.info(`[anthropic] Cleaning up stale V2 session: ${key}`);
           try {
             session.session.close();
-          } catch (e) {
+          } catch (_e) {
             // Ignore close errors
           }
           activeSessions.delete(key);
@@ -635,7 +635,7 @@ function stopCleanupAndCloseSessions() {
     logger.info(`[anthropic] Closing V2 session on shutdown: ${key}`);
     try {
       session.session.close();
-    } catch (e) {
+    } catch (_e) {
       // Ignore close errors
     }
   }
@@ -677,7 +677,7 @@ class AnthropicClient implements ModelClient {
   private envOverrides: Record<string, string | undefined> = {};
 
   constructor(
-    private credential: string,
+    credential: string,
     private options?: Record<string, unknown>,
   ) {
     // Hosted mode: platform injects baseUrl + tenantToken to route through gateway
@@ -700,7 +700,7 @@ class AnthropicClient implements ModelClient {
       this.envOverrides.ANTHROPIC_BASE_URL = baseUrl;
       this.envOverrides.ANTHROPIC_API_KEY = tenantToken;
       logger.info(`[anthropic] Using hosted mode: gateway at ${baseUrl}`);
-    } else if (credential && credential.startsWith("sk-ant-")) {
+    } else if (credential?.startsWith("sk-ant-")) {
       this.authType = "api_key";
       this.envOverrides.ANTHROPIC_BASE_URL = undefined;
       this.envOverrides.ANTHROPIC_API_KEY = credential;
@@ -760,7 +760,7 @@ class AnthropicClient implements ModelClient {
       logger.info(`[anthropic] Closing session: ${sessionKey}`);
       try {
         active.session.close();
-      } catch (e) {
+      } catch (_e) {
         // Ignore close errors
       }
       activeSessions.delete(sessionKey);
@@ -937,28 +937,51 @@ class AnthropicClient implements ModelClient {
     if (opts.providerOptions) Object.assign(queryOptions, opts.providerOptions);
     if (this.options) Object.assign(queryOptions, this.options);
 
-    try {
-      const q = await retryWithBackoff(
-        async () => query({ prompt, options: queryOptions }),
-        { maxRetries: 3, baseDelayMs: 1000 },
-        logger,
-      );
-      let sessionLogged = false;
+    const maxRetries = 3;
+    const baseDelayMs = 1000;
+    const retryableCodes = [429, 503];
 
-      for await (const msg of q) {
-        // Log session ID once for debugging
-        const msgWithId = msg as SDKMessageWithSessionId;
-        if (msgWithId.session_id && !sessionLogged) {
-          logger.info(`[anthropic] Session initialized: ${msgWithId.session_id}`);
-          sessionLogged = true;
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const q = query({ prompt, options: queryOptions });
+        let sessionLogged = false;
+        for await (const msg of q) {
+          const msgWithId = msg as SDKMessageWithSessionId;
+          if (msgWithId.session_id && !sessionLogged) {
+            logger.info(`[anthropic] Session initialized: ${msgWithId.session_id}`);
+            sessionLogged = true;
+          }
+          yield msg;
         }
-        // Pass through all messages unchanged
-        yield msg;
+        return; // Success — done iterating
+      } catch (error: unknown) {
+        lastError = error;
+        if (attempt === maxRetries) break;
+
+        const msg = error instanceof Error ? error.message : String(error);
+        const status = (error as any)?.status ?? (error as any)?.statusCode;
+        const isRetryable =
+          (status && retryableCodes.includes(status)) ||
+          msg.includes("ECONNRESET") ||
+          msg.includes("ECONNREFUSED") ||
+          msg.includes("ETIMEDOUT") ||
+          msg.includes("fetch failed") ||
+          msg.includes("network") ||
+          msg.includes("socket hang up");
+
+        if (!isRetryable) break;
+
+        const delay = baseDelayMs * 2 ** attempt;
+        logger.warn(
+          `[retry] Attempt ${attempt + 1}/${maxRetries} failed (${status || msg.slice(0, 80)}), retrying in ${delay}ms`,
+        );
+        await new Promise((r) => setTimeout(r, delay));
       }
-    } catch (error) {
-      logger.error("[anthropic] Query failed:", error);
-      throw new Error(`Anthropic query failed: ${error instanceof Error ? error.message : String(error)}`);
     }
+
+    logger.error("[anthropic] Query failed:", lastError);
+    throw new Error(`Anthropic query failed: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
   }
 
   async listModels(): Promise<string[]> {
@@ -973,9 +996,9 @@ class AnthropicClient implements ModelClient {
 
   async healthCheck(): Promise<boolean> {
     try {
-      const q = await retryWithBackoff(
-        async () =>
-          query({
+      await retryWithBackoff(
+        async () => {
+          const q = query({
             prompt: "test",
             options: {
               max_tokens: 10,
@@ -983,12 +1006,13 @@ class AnthropicClient implements ModelClient {
               allowDangerouslySkipPermissions: true,
               env: this.buildEnv(),
             } as any,
-          }),
+          });
+          for await (const _ of q) {
+          }
+        },
         { maxRetries: 3, baseDelayMs: 1000 },
         logger,
       );
-      for await (const _ of q) {
-      }
       return true;
     } catch (error) {
       logger.error("[anthropic] Health check failed:", error);
