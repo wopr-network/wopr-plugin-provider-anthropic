@@ -345,9 +345,16 @@ interface ModelCacheEntry {
 let modelCache: ModelCacheEntry | null = null;
 
 function stripHtml(html: string): string {
-  return html
-    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
-    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+  // Remove script and style blocks iteratively to prevent incomplete sanitization
+  // from interleaved tags (e.g. <scr<script>ipt>) after a single-pass removal.
+  let result = html;
+  let prev: string;
+  do {
+    prev = result;
+    result = result.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "");
+    result = result.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "");
+  } while (result !== prev);
+  return result
     .replace(/<[^>]+>/g, " ")
     .replace(/&nbsp;/g, " ")
     .replace(/&amp;/g, "&")
