@@ -649,19 +649,21 @@ function stopCleanupAndCloseSessions() {
 // correctly serializing 3+ concurrent callers on the same sessionKey.
 async function withSessionLock<T>(sessionKey: string, fn: () => Promise<T>): Promise<T> {
   const prev = sessionLocks.get(sessionKey) ?? Promise.resolve();
-
   let resolve: () => void;
   const next = new Promise<void>((r) => {
     resolve = r;
   });
+  // Always point the map at the newest tail so future waiters chain correctly
   sessionLocks.set(sessionKey, next);
 
+  // Wait until every earlier caller has finished
   await prev;
 
   try {
     return await fn();
   } finally {
     resolve!();
+    // Only delete if this is still our lock (no newer waiter has enqueued)
     if (sessionLocks.get(sessionKey) === next) {
       sessionLocks.delete(sessionKey);
     }
@@ -960,6 +962,7 @@ class AnthropicClient implements ModelClient {
     const retryableCodes = [429, 503];
 
     let lastError: unknown;
+    let hasYielded = false;
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
         const q = query({ prompt, options: queryOptions });
@@ -970,12 +973,14 @@ class AnthropicClient implements ModelClient {
             logger.info(`[anthropic] Session initialized: ${msgWithId.session_id}`);
             sessionLogged = true;
           }
+          hasYielded = true;
           yield msg;
         }
         return; // Success — done iterating
       } catch (error: unknown) {
         lastError = error;
-        if (attempt === maxRetries) break;
+        // Never retry after partial output — caller already received some messages
+        if (attempt === maxRetries || hasYielded) break;
 
         const msg = error instanceof Error ? error.message : String(error);
         const status = (error as any)?.status ?? (error as any)?.statusCode;
