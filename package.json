@@ -37,7 +37,7 @@
     "test": "vitest run"
   },
   "type": "module",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "publishConfig": {
     "access": "public"
   },

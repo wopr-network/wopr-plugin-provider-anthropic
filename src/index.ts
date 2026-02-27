@@ -49,6 +49,21 @@ type ThinkingConfig =
     }
   | { type: "disabled" };
 
+/** Tool Search configuration — enables on-demand tool discovery for large tool libraries. */
+interface ToolSearchConfig {
+  /** Which search variant to use. */
+  variant: "regex" | "bm25";
+}
+
+/** Programmatic Tool Calling configuration — enables code execution-based tool orchestration. */
+interface ProgrammaticToolCallingConfig {
+  /**
+   * Container ID to reuse from a previous request.
+   * Omit to create a new container.
+   */
+  containerId?: string;
+}
+
 /**
  * Structured output format using JSON Schema constrained decoding.
  * GA on Claude Opus 4.6, Sonnet 4.5, Opus 4.5, Haiku 4.5.
@@ -84,6 +99,19 @@ interface ModelQueryOptions {
    * that violate the schema. Supported on Opus 4.6, Sonnet 4.5, Opus 4.5, Haiku 4.5.
    */
   responseFormat?: ResponseFormat;
+  /**
+   * Enable Tool Search Tool for on-demand tool discovery.
+   * Reduces token consumption by ~85% for large tool libraries (10+ tools).
+   * Tools passed via providerOptions should include `defer_loading: true`.
+   */
+  toolSearch?: ToolSearchConfig;
+  /**
+   * Enable Programmatic Tool Calling via code execution.
+   * Claude writes Python code to orchestrate tools, reducing token consumption
+   * by ~37% and eliminating per-tool API round-trips.
+   * Tools should include `allowed_callers: ["code_execution_20260120"]`.
+   */
+  programmaticToolCalling?: ProgrammaticToolCallingConfig;
 }
 
 interface ModelClient {
@@ -877,6 +905,13 @@ class AnthropicClient implements ModelClient {
         if (opts.responseFormat) {
           sessionOptions.outputFormat = opts.responseFormat;
         }
+        if (opts.toolSearch) sessionOptions.toolSearch = opts.toolSearch;
+        if (opts.programmaticToolCalling) {
+          sessionOptions.programmaticToolCalling = opts.programmaticToolCalling;
+          if (opts.programmaticToolCalling.containerId) {
+            sessionOptions.container = opts.programmaticToolCalling.containerId;
+          }
+        }
         if (opts.providerOptions) {
           // Copy providerOptions but don't overwrite allowedTools or env (already handled above)
           const { allowedTools: _, env: _env, ...restOptions } = opts.providerOptions;
@@ -980,6 +1015,13 @@ class AnthropicClient implements ModelClient {
     if (opts.betas) queryOptions.betas = opts.betas;
     if (opts.responseFormat) {
       queryOptions.outputFormat = opts.responseFormat;
+    }
+    if (opts.toolSearch) queryOptions.toolSearch = opts.toolSearch;
+    if (opts.programmaticToolCalling) {
+      queryOptions.programmaticToolCalling = opts.programmaticToolCalling;
+      if (opts.programmaticToolCalling.containerId) {
+        queryOptions.container = opts.programmaticToolCalling.containerId;
+      }
     }
 
     let prompt = opts.prompt;
@@ -1093,7 +1135,7 @@ class AnthropicClient implements ModelClient {
 
 // Export client class and model discovery for type checking
 export { AnthropicClient, discoverModels, getModelInfo };
-export type { DiscoveredModel, ResponseFormat };
+export type { DiscoveredModel, ProgrammaticToolCallingConfig, ResponseFormat, ToolSearchConfig };
 
 // =============================================================================
 // Plugin Manifest
@@ -1103,7 +1145,7 @@ const manifest: PluginManifest = {
   name: pkg.name,
   version: pkg.version,
   description:
-    "Anthropic Claude with OAuth, API Key, Bedrock, Vertex, Foundry support + dynamic model discovery + structured outputs",
+    "Anthropic Claude with OAuth, API Key, Bedrock, Vertex, Foundry support + dynamic model discovery + structured outputs + tool search + programmatic tool calling",
   author: "WOPR Network",
   license: "MIT",
   repository: "https://github.com/wopr-network/wopr-plugin-provider-anthropic",
@@ -1206,7 +1248,7 @@ const plugin: WOPRPlugin & {
   name: "provider-anthropic",
   version: pkg.version,
   description:
-    "Anthropic Claude with OAuth, API Key, Bedrock, Vertex, Foundry support + dynamic model discovery + structured outputs",
+    "Anthropic Claude with OAuth, API Key, Bedrock, Vertex, Foundry support + dynamic model discovery + structured outputs + tool search + programmatic tool calling",
   manifest,
 
   async init(ctx: WOPRPluginContext) {
