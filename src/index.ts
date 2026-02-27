@@ -1123,7 +1123,6 @@ const manifest: PluginManifest = {
         type: "llm",
         id: "anthropic",
         displayName: "Anthropic Claude",
-        tier: "byok",
         configSchema: {
           title: "Anthropic Claude",
           description: "Configure Anthropic Claude authentication",
@@ -1198,6 +1197,9 @@ const manifest: PluginManifest = {
 // Plugin Export
 // =============================================================================
 
+// Stored during init() so shutdown/onDeactivate can call unregister methods.
+let pluginCtx: WOPRPluginContext | null = null;
+
 const plugin: WOPRPlugin & {
   onActivate?: (ctx: WOPRPluginContext) => Promise<void>;
   onDeactivate?: () => Promise<void>;
@@ -1210,6 +1212,7 @@ const plugin: WOPRPlugin & {
   manifest,
 
   async init(ctx: WOPRPluginContext) {
+    pluginCtx = ctx;
     ctx.log.info("Registering Anthropic provider...");
 
     const activeAuth = getActiveAuthMethod();
@@ -1226,7 +1229,7 @@ const plugin: WOPRPlugin & {
       }
     }
 
-    ctx.registerLLMProvider(anthropicProvider);
+    ctx.registerProvider(anthropicProvider);
     ctx.log.info("Anthropic provider registered");
 
     // Register extension for daemon model endpoint enrichment (WOP-268)
@@ -1307,6 +1310,12 @@ const plugin: WOPRPlugin & {
 
   async shutdown() {
     logger.info("[provider-anthropic] Shutting down");
+    if (pluginCtx) {
+      pluginCtx.unregisterProvider("anthropic");
+      pluginCtx.unregisterExtension("provider-anthropic");
+      pluginCtx.unregisterConfigSchema("provider-anthropic");
+      pluginCtx = null;
+    }
     stopCleanupAndCloseSessions();
   },
 
@@ -1317,6 +1326,12 @@ const plugin: WOPRPlugin & {
 
   async onDeactivate() {
     logger.info("[provider-anthropic] Deactivating");
+    if (pluginCtx) {
+      pluginCtx.unregisterProvider("anthropic");
+      pluginCtx.unregisterExtension("provider-anthropic");
+      pluginCtx.unregisterConfigSchema("provider-anthropic");
+      pluginCtx = null;
+    }
     stopCleanupAndCloseSessions();
   },
 

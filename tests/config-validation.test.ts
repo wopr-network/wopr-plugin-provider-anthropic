@@ -49,12 +49,15 @@ describe("config validation", () => {
 
       const ctx = {
         log: { info: vi.fn(), warn: vi.fn() },
-        registerLLMProvider: vi.fn(),
+        registerProvider: vi.fn(),
+        unregisterProvider: vi.fn(),
+        unregisterExtension: vi.fn(),
+        unregisterConfigSchema: vi.fn(),
         registerConfigSchema: vi.fn(),
       };
       await plugin.init(ctx);
 
-      const provider = ctx.registerLLMProvider.mock.calls[0][0] as {
+      const provider = ctx.registerProvider.mock.calls[0][0] as {
         validateCredentials: (cred: string) => Promise<boolean>;
       };
 
@@ -92,12 +95,15 @@ describe("config validation", () => {
       const { default: plugin } = await import("../src/index.js");
       const ctx = {
         log: { info: vi.fn(), warn: vi.fn() },
-        registerLLMProvider: vi.fn(),
+        registerProvider: vi.fn(),
+        unregisterProvider: vi.fn(),
+        unregisterExtension: vi.fn(),
+        unregisterConfigSchema: vi.fn(),
         registerConfigSchema: vi.fn(),
       };
       await plugin.init(ctx);
 
-      const provider = ctx.registerLLMProvider.mock.calls[0][0] as {
+      const provider = ctx.registerProvider.mock.calls[0][0] as {
         validateCredentials: (cred: string) => Promise<boolean>;
       };
 
@@ -112,12 +118,15 @@ describe("config validation", () => {
 
       const ctx = {
         log: { info: vi.fn(), warn: vi.fn() },
-        registerLLMProvider: vi.fn(),
+        registerProvider: vi.fn(),
+        unregisterProvider: vi.fn(),
+        unregisterExtension: vi.fn(),
+        unregisterConfigSchema: vi.fn(),
         registerConfigSchema: vi.fn(),
       };
       await plugin.init(ctx);
 
-      const provider = ctx.registerLLMProvider.mock.calls[0][0] as {
+      const provider = ctx.registerProvider.mock.calls[0][0] as {
         defaultModel: string;
         supportedModels: string[];
       };
@@ -141,12 +150,15 @@ describe("config validation", () => {
 
       const ctx = {
         log: { info: vi.fn(), warn: vi.fn() },
-        registerLLMProvider: vi.fn(),
+        registerProvider: vi.fn(),
+        unregisterProvider: vi.fn(),
+        unregisterExtension: vi.fn(),
+        unregisterConfigSchema: vi.fn(),
         registerConfigSchema: vi.fn(),
       };
       await plugin.init(ctx);
 
-      const provider = ctx.registerLLMProvider.mock.calls[0][0] as {
+      const provider = ctx.registerProvider.mock.calls[0][0] as {
         supportedModels: string[];
       };
 
@@ -163,7 +175,10 @@ describe("config validation", () => {
 
       const ctx = {
         log: { info: vi.fn(), warn: vi.fn() },
-        registerLLMProvider: vi.fn(),
+        registerProvider: vi.fn(),
+        unregisterProvider: vi.fn(),
+        unregisterExtension: vi.fn(),
+        unregisterConfigSchema: vi.fn(),
         registerConfigSchema: vi.fn(),
       };
       await plugin.init(ctx);
@@ -192,7 +207,10 @@ describe("config validation", () => {
 
       const ctx = {
         log: { info: vi.fn(), warn: vi.fn() },
-        registerLLMProvider: vi.fn(),
+        registerProvider: vi.fn(),
+        unregisterProvider: vi.fn(),
+        unregisterExtension: vi.fn(),
+        unregisterConfigSchema: vi.fn(),
         registerConfigSchema: vi.fn(),
       };
       await plugin.init(ctx);
@@ -240,12 +258,15 @@ describe("config validation", () => {
       const { default: plugin } = await import("../src/index.js");
       const ctx = {
         log: { info: vi.fn(), warn: vi.fn() },
-        registerLLMProvider: vi.fn(),
+        registerProvider: vi.fn(),
+        unregisterProvider: vi.fn(),
+        unregisterExtension: vi.fn(),
+        unregisterConfigSchema: vi.fn(),
         registerConfigSchema: vi.fn(),
       };
       await plugin.init(ctx);
 
-      const provider = ctx.registerLLMProvider.mock.calls[0][0] as {
+      const provider = ctx.registerProvider.mock.calls[0][0] as {
         getCredentialType: () => string;
       };
 
@@ -266,12 +287,15 @@ describe("config validation", () => {
       const { default: plugin } = await import("../src/index.js");
       const ctx = {
         log: { info: vi.fn(), warn: vi.fn() },
-        registerLLMProvider: vi.fn(),
+        registerProvider: vi.fn(),
+        unregisterProvider: vi.fn(),
+        unregisterExtension: vi.fn(),
+        unregisterConfigSchema: vi.fn(),
         registerConfigSchema: vi.fn(),
       };
       await plugin.init(ctx);
 
-      const provider = ctx.registerLLMProvider.mock.calls[0][0] as {
+      const provider = ctx.registerProvider.mock.calls[0][0] as {
         getActiveAuthMethod: () => string;
       };
 

@@ -80,14 +80,17 @@ describe("plugin registration smoke test", () => {
 
     const ctx = {
       log: { info: vi.fn(), warn: vi.fn() },
-      registerLLMProvider: vi.fn((p: unknown) => registeredProviders.push(p)),
+      registerProvider: vi.fn((p: unknown) => registeredProviders.push(p)),
+      unregisterProvider: vi.fn(),
+      unregisterExtension: vi.fn(),
+      unregisterConfigSchema: vi.fn(),
       registerConfigSchema: vi.fn((name: string, schema: unknown) => registeredSchemas.push({ name, schema })),
     };
 
     await plugin.init(ctx);
 
     // Provider was registered
-    expect(ctx.registerLLMProvider).toHaveBeenCalledOnce();
+    expect(ctx.registerProvider).toHaveBeenCalledOnce();
     expect(registeredProviders).toHaveLength(1);
 
     const provider = registeredProviders[0] as Record<string, unknown>;
