@@ -12,8 +12,8 @@ importers:
         specifier: ^0.2.49
         version: 0.2.49(zod@4.3.6)
       '@anthropic-ai/claude-code':
-        specifier: ^2.1.49
-        version: 2.1.49
+        specifier: ^2.1.62
+        version: 2.1.62
       '@wopr-network/plugin-types':
         specifier: ^0.7.0
         version: 0.7.0(zod@4.3.6)
@@ -45,8 +45,8 @@ packages:
     peerDependencies:
       zod: ^4.0.0
 
-  '@anthropic-ai/claude-code@2.1.49':
-    resolution: {integrity: sha512-PonEmTZlB5IZbBu9TmtOpGZnupU7OxOXTsJKcXE/4Ak5qp3ptN1wSBRdgKYnn6GDYhXijTXuVVwrCQU+NAgwPA==}
+  '@anthropic-ai/claude-code@2.1.62':
+    resolution: {integrity: sha512-IzslR/dbIlQj0W1bqd9opLaSsSknhwLZVZ3i03LlanWbe1MczBskQn6Veg5CgzmZeWEwKJR1kR3+5t4bCUmLmg==}
     engines: {node: '>=18.0.0'}
     hasBin: true
 
@@ -1169,7 +1169,7 @@ snapshots:
       '@img/sharp-win32-arm64': 0.34.5
       '@img/sharp-win32-x64': 0.34.5
 
-  '@anthropic-ai/claude-code@2.1.49':
+  '@anthropic-ai/claude-code@2.1.62':
     optionalDependencies:
       '@img/sharp-darwin-arm64': 0.34.5
       '@img/sharp-darwin-x64': 0.34.5
