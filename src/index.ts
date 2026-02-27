@@ -690,7 +690,7 @@ function startCleanupInterval() {
       }
     },
     5 * 60 * 1000,
-  ); // Check every 5 minutes
+  ).unref(); // unref so this timer doesn't prevent process exit when idle
 }
 
 // Stop cleanup interval and close all sessions (for shutdown)
