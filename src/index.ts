@@ -8,7 +8,16 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const pkg = JSON.parse(readFileSync(join(__dirname, "..", "package.json"), "utf-8")) as {
+  name: string;
+  version: string;
+};
+
 import {
   query,
   type SDKMessage,
@@ -1091,8 +1100,8 @@ export type { DiscoveredModel, ResponseFormat };
 // =============================================================================
 
 const manifest: PluginManifest = {
-  name: "@wopr-network/wopr-plugin-provider-anthropic",
-  version: "2.3.0",
+  name: pkg.name,
+  version: pkg.version,
   description:
     "Anthropic Claude with OAuth, API Key, Bedrock, Vertex, Foundry support + dynamic model discovery + structured outputs",
   author: "WOPR Network",
@@ -1107,6 +1116,39 @@ const manifest: PluginManifest = {
       outbound: true,
       hosts: ["api.anthropic.com", "docs.anthropic.com"],
     },
+  },
+  provides: {
+    capabilities: [
+      {
+        type: "llm",
+        id: "anthropic",
+        displayName: "Anthropic Claude",
+        tier: "byok",
+        configSchema: {
+          title: "Anthropic Claude",
+          description: "Configure Anthropic Claude authentication",
+          fields: [
+            {
+              name: "authMethod",
+              type: "select",
+              label: "Authentication Method",
+              description: "Choose how to authenticate with Claude",
+              setupFlow: "paste",
+            },
+            {
+              name: "apiKey",
+              type: "password",
+              label: "API Key",
+              placeholder: "sk-ant-...",
+              required: false,
+              description: "Only needed for API Key auth method",
+              secret: true,
+              setupFlow: "paste",
+            },
+          ],
+        },
+      },
+    ],
   },
   configSchema: {
     title: "Anthropic Claude",
@@ -1156,9 +1198,13 @@ const manifest: PluginManifest = {
 // Plugin Export
 // =============================================================================
 
-const plugin: WOPRPlugin = {
+const plugin: WOPRPlugin & {
+  onActivate?: (ctx: WOPRPluginContext) => Promise<void>;
+  onDeactivate?: () => Promise<void>;
+  onDrain?: () => Promise<void>;
+} = {
   name: "provider-anthropic",
-  version: "2.3.0",
+  version: pkg.version,
   description:
     "Anthropic Claude with OAuth, API Key, Bedrock, Vertex, Foundry support + dynamic model discovery + structured outputs",
   manifest,
@@ -1261,6 +1307,28 @@ const plugin: WOPRPlugin = {
 
   async shutdown() {
     logger.info("[provider-anthropic] Shutting down");
+    stopCleanupAndCloseSessions();
+  },
+
+  async onActivate(ctx: WOPRPluginContext) {
+    ctx.log.info("[provider-anthropic] Activated");
+    startCleanupInterval();
+  },
+
+  async onDeactivate() {
+    logger.info("[provider-anthropic] Deactivating");
+    stopCleanupAndCloseSessions();
+  },
+
+  async onDrain() {
+    logger.info("[provider-anthropic] Draining — waiting for active sessions to complete");
+    const maxWait = manifest.lifecycle?.shutdownTimeoutMs ?? 10000;
+    const start = Date.now();
+    while (Date.now() - start < maxWait) {
+      const streaming = [...activeSessions.values()].filter((s) => s.streaming);
+      if (streaming.length === 0) break;
+      await new Promise((r) => setTimeout(r, 500));
+    }
     stopCleanupAndCloseSessions();
   },
 };
