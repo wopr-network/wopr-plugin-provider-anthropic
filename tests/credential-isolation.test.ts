@@ -40,12 +40,15 @@ describe("credential isolation in validateCredentials", () => {
     const { default: plugin } = await import("../src/index.js");
     const ctx = {
       log: { info: vi.fn(), warn: vi.fn() },
-      registerLLMProvider: vi.fn(),
+      registerProvider: vi.fn(),
+      unregisterProvider: vi.fn(),
+      unregisterExtension: vi.fn(),
+      unregisterConfigSchema: vi.fn(),
       registerConfigSchema: vi.fn(),
     };
     await plugin.init(ctx);
 
-    const provider = ctx.registerLLMProvider.mock.calls[0][0] as {
+    const provider = ctx.registerProvider.mock.calls[0][0] as {
       validateCredentials: (cred: string) => Promise<boolean>;
     };
 
@@ -66,12 +69,15 @@ describe("credential isolation in validateCredentials", () => {
     const { default: plugin } = await import("../src/index.js");
     const ctx = {
       log: { info: vi.fn(), warn: vi.fn() },
-      registerLLMProvider: vi.fn(),
+      registerProvider: vi.fn(),
+      unregisterProvider: vi.fn(),
+      unregisterExtension: vi.fn(),
+      unregisterConfigSchema: vi.fn(),
       registerConfigSchema: vi.fn(),
     };
     await plugin.init(ctx);
 
-    const provider = ctx.registerLLMProvider.mock.calls[0][0] as {
+    const provider = ctx.registerProvider.mock.calls[0][0] as {
       validateCredentials: (cred: string) => Promise<boolean>;
     };
 
@@ -102,12 +108,15 @@ describe("credential isolation in validateCredentials", () => {
     const { default: plugin } = await import("../src/index.js");
     const ctx = {
       log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-      registerLLMProvider: vi.fn(),
+      registerProvider: vi.fn(),
+      unregisterProvider: vi.fn(),
+      unregisterExtension: vi.fn(),
+      unregisterConfigSchema: vi.fn(),
       registerConfigSchema: vi.fn(),
     };
     await plugin.init(ctx);
 
-    const provider = ctx.registerLLMProvider.mock.calls[0][0] as {
+    const provider = ctx.registerProvider.mock.calls[0][0] as {
       validateCredentials: (cred: string) => Promise<boolean>;
     };
 
