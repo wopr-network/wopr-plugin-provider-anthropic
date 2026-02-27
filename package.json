@@ -29,22 +29,15 @@
   },
   "scripts": {
     "build": "tsc",
-    "check": "biome check index.ts tests/ && tsc --noEmit",
-    "format": "biome format --write index.ts tests/",
-    "lint": "biome check index.ts tests/",
-    "lint:fix": "biome check --fix src/",
+    "check": "biome check src/ tests/ && tsc --noEmit",
+    "format": "biome format --write src/ tests/",
+    "lint": "biome check src/ tests/",
+    "lint:fix": "biome check --fix src/ tests/",
     "prepublishOnly": "npm run build",
     "test": "vitest run"
   },
   "type": "module",
   "version": "2.3.0",
-  "wopr": {
-    "plugin": {
-      "category": "provider",
-      "description": "Anthropic Claude API via Agent SDK",
-      "name": "provider-anthropic"
-    }
-  },
   "publishConfig": {
     "access": "public"
   },
