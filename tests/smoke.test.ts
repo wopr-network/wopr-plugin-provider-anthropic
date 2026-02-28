@@ -60,7 +60,8 @@ describe("plugin registration smoke test", () => {
     const { default: plugin } = await import("../src/index.js");
 
     expect(plugin.manifest).toBeDefined();
-    const m = plugin.manifest!;
+    const m = plugin.manifest;
+    if (!m) return;
     expect(m.name).toBe("@wopr-network/wopr-plugin-provider-anthropic");
     expect(m.version).toMatch(/^\d+\.\d+\.\d+/);
     expect(m.description).toBeTypeOf("string");
