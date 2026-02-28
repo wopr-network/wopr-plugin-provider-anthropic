@@ -224,9 +224,9 @@ describe("config validation", () => {
 
       const authMethodField = schema.fields.find((f) => f.name === "authMethod");
       expect(authMethodField).toBeDefined();
-      expect(authMethodField!.options).toBeDefined();
+      expect(authMethodField?.options).toBeDefined();
 
-      const optionValues = authMethodField!.options!.map((o) => o.value);
+      const optionValues = authMethodField?.options?.map((o) => o.value);
       expect(optionValues).toContain("oauth");
       expect(optionValues).toContain("api-key");
     });

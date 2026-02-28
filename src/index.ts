@@ -750,7 +750,7 @@ async function withSessionLock<T>(sessionKey: string, fn: () => Promise<T>): Pro
   }
 
   // Create a new lock for this operation
-  let resolve: () => void;
+  let resolve: () => void = () => {};
   const lockPromise = new Promise<void>((r) => {
     resolve = r;
   });
@@ -759,7 +759,7 @@ async function withSessionLock<T>(sessionKey: string, fn: () => Promise<T>): Pro
   try {
     return await fn();
   } finally {
-    resolve!();
+    resolve?.();
     // Only delete if this is still our lock
     if (sessionLocks.get(sessionKey) === lockPromise) {
       sessionLocks.delete(sessionKey);
