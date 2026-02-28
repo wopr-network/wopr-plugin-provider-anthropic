@@ -30,7 +30,7 @@ describe("message translation (WOPR -> Anthropic SDK)", () => {
 
   it("translates a basic prompt into the SDK query format", async () => {
     // Mock query to yield a single assistant response
-    mockQuery.mockImplementation(({ prompt, options }: { prompt: string; options: Record<string, unknown> }) => {
+    mockQuery.mockImplementation(({ prompt }: { prompt: string; options: Record<string, unknown> }) => {
       // Return an async iterable
       return (async function* () {
         yield {

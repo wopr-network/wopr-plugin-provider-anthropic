@@ -68,7 +68,7 @@ describe("plugin registration smoke test", () => {
     expect(m.category).toBe("ai-provider");
     expect(m.requires?.network?.outbound).toBe(true);
     expect(m.configSchema).toBeDefined();
-    expect(m.configSchema!.fields.length).toBeGreaterThan(0);
+    expect(m.configSchema?.fields.length).toBeGreaterThan(0);
     expect(m.lifecycle?.shutdownBehavior).toBe("graceful");
   });
 
