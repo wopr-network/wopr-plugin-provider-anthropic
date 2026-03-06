@@ -1218,6 +1218,7 @@ const manifest: PluginManifest = {
         label: "Gateway Base URL",
         required: false,
         description: "WOPR gateway URL (injected by platform for hosted tenants)",
+        hidden: true,
       },
       {
         name: "tenantToken",
@@ -1226,6 +1227,7 @@ const manifest: PluginManifest = {
         required: false,
         description: "WOPR tenant auth token (injected by platform for hosted tenants)",
         secret: true,
+        hidden: true,
       },
     ],
   },
